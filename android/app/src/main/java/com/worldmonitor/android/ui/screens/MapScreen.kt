@@ -254,12 +254,8 @@ fun MapScreen(
                         val hitBox = android.graphics.RectF(px.x - 40f, px.y - 40f, px.x + 40f, px.y + 40f)
                         val features = map.queryRenderedFeatures(hitBox, COUNTRY_FILL_LAYER)
                         val iso = features.firstOrNull()
-                            ?.let { feat ->
-                                feat.getStringProperty("ISO_A2")
-                                    ?.takeIf { it.isNotBlank() && it != "-99" && it != "-1" }
-                                    ?: feat.getStringProperty("iso_a2")
-                                    ?.takeIf { it.isNotBlank() && it != "-99" && it != "-1" }
-                            }
+                            ?.getStringProperty("ISO3166-1-Alpha-2")
+                            ?.takeIf { it.isNotBlank() && it != "-99" && it != "-1" }
                         if (!iso.isNullOrBlank()) {
                             vm.selectCountry(iso)
                             true
@@ -507,8 +503,7 @@ private fun buildHeatmapColorExpression(scores: Map<String, Float>): Expression 
     if (scores.isEmpty()) return Expression.rgba(0.0, 0.0, 0.0, 0.0)
 
     val parts = mutableListOf<Expression>()
-    // Input: prefer ISO_A2, fall back to iso_a2
-    parts.add(Expression.coalesce(Expression.get("ISO_A2"), Expression.get("iso_a2")))
+    parts.add(Expression.get("ISO3166-1-Alpha-2"))
     scores.forEach { (iso, score) ->
         parts.add(Expression.literal(iso))
         parts.add(scoreToRgba(score))
