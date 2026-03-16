@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.worldmonitor.android.WorldMonitorApp
+import com.worldmonitor.android.data.preferences.AppPreferences
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -11,14 +12,10 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
-enum class ConnectionStatus { IDLE, TESTING, SUCCESS, FAILURE }
-
 data class SettingsUiState(
-    val serverUrl: String = "",
-    val refreshInterval: Int = 5,
+    val refreshInterval: Int = AppPreferences.DEFAULT_REFRESH_INTERVAL,
     val mapStyleUrl: String = "",
-    val connectionStatus: ConnectionStatus = ConnectionStatus.IDLE,
-    val connectionError: String? = null,
+    val isConnected: Boolean = false,
 )
 
 class SettingsViewModel(application: Application) : AndroidViewModel(application) {
@@ -32,36 +29,16 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch {
             _uiState.update {
                 it.copy(
-                    serverUrl = prefs.serverUrl.first(),
                     refreshInterval = prefs.refreshInterval.first(),
                     mapStyleUrl = prefs.mapStyleUrl.first(),
                 )
             }
         }
-    }
-
-    fun updateServerUrl(url: String) {
-        _uiState.update { it.copy(serverUrl = url, connectionStatus = ConnectionStatus.IDLE) }
-    }
-
-    fun testAndSaveConnection(url: String) {
+        // Observe shared connection state — updated by MapViewModel on every refresh cycle
         viewModelScope.launch {
-            _uiState.update { it.copy(connectionStatus = ConnectionStatus.TESTING, connectionError = null) }
-            val repo = app.buildRepository(url)
-            repo.checkHealth().fold(
-                onSuccess = {
-                    prefs.setServerUrl(url)
-                    _uiState.update { it.copy(connectionStatus = ConnectionStatus.SUCCESS, serverUrl = url) }
-                },
-                onFailure = { err ->
-                    _uiState.update {
-                        it.copy(
-                            connectionStatus = ConnectionStatus.FAILURE,
-                            connectionError = err.message ?: "Connection failed",
-                        )
-                    }
-                }
-            )
+            app.isServerConnected.collect { connected ->
+                _uiState.update { it.copy(isConnected = connected) }
+            }
         }
     }
 

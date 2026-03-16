@@ -68,6 +68,7 @@ import com.worldmonitor.android.ui.theme.OrangeAlert
 import com.worldmonitor.android.ui.theme.RedCritical
 import com.worldmonitor.android.ui.theme.TextPrimary
 import com.worldmonitor.android.ui.theme.TextSecondary
+import com.worldmonitor.android.viewmodel.MapEventInfo
 import com.worldmonitor.android.viewmodel.MapViewModel
 import kotlinx.coroutines.delay
 import org.maplibre.android.MapLibre
@@ -81,7 +82,7 @@ import org.maplibre.android.style.layers.CircleLayer
 import org.maplibre.android.style.layers.FillLayer
 import org.maplibre.android.style.layers.PropertyFactory
 import org.maplibre.android.style.sources.GeoJsonSource
-import java.nio.charset.StandardCharsets
+import kotlin.math.sin
 
 private const val DARK_MAP_STYLE = "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json"
 private const val COUNTRIES_SOURCE_ID = "countries-source"
@@ -106,11 +107,9 @@ fun MapScreen(
 
     remember { MapLibre.getInstance(context) }
 
-    // Fix #1 — call onCreate() immediately so MapView initialises before lifecycle events fire
     val mapView = remember { MapView(context).also { it.onCreate(Bundle()) } }
 
     var mapRef by remember { mutableStateOf<MapLibreMap?>(null) }
-    var countriesSource by remember { mutableStateOf<GeoJsonSource?>(null) }
     var eventsSource by remember { mutableStateOf<GeoJsonSource?>(null) }
     var styleReady by remember { mutableStateOf(false) }
 
@@ -121,24 +120,13 @@ fun MapScreen(
         while (countdown > 0) { delay(1_000L); countdown-- }
     }
 
-    // Fix #2 — update heatmap by swapping the fill-layer expression, NOT by re-loading GeoJSON
-    LaunchedEffect(state.scores, styleReady) {
-        if (!styleReady) return@LaunchedEffect
-        mapRef?.getStyle { style ->
-            (style.getLayer(COUNTRY_FILL_LAYER) as? FillLayer)?.setProperties(
-                PropertyFactory.fillColor(buildHeatmapColorExpression(state.scores))
-            )
-        }
+    // Ensure MapView is properly started when this composable enters the screen
+    LaunchedEffect(Unit) {
+        mapView.onStart()
+        mapView.onResume()
     }
 
-    // Update event markers
-    LaunchedEffect(state.eventGeoJson, styleReady) {
-        val src = eventsSource ?: return@LaunchedEffect
-        if (!styleReady) return@LaunchedEffect
-        src.setGeoJson(state.eventGeoJson)
-    }
-
-    // Fix #3 — only forward lifecycle changes; onCreate is handled in factory above
+    // Forward Activity/NavBackStackEntry lifecycle events to MapView
     DisposableEffect(lifecycle) {
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
@@ -151,7 +139,44 @@ fun MapScreen(
             }
         }
         lifecycle.addObserver(observer)
-        onDispose { lifecycle.removeObserver(observer) }
+        onDispose {
+            lifecycle.removeObserver(observer)
+            mapView.onStop()
+            mapView.onDestroy()
+        }
+    }
+
+    // Update heatmap color expression when scores change
+    LaunchedEffect(state.scores, styleReady) {
+        if (!styleReady) return@LaunchedEffect
+        mapRef?.getStyle { style ->
+            (style.getLayer(COUNTRY_FILL_LAYER) as? FillLayer)?.setProperties(
+                PropertyFactory.fillColor(buildHeatmapColorExpression(state.scores))
+            )
+        }
+    }
+
+    // Glistening heatmap: slowly animate fill opacity in a sine wave for a living-light effect
+    LaunchedEffect(styleReady) {
+        if (!styleReady) return@LaunchedEffect
+        var t = 0.0
+        while (true) {
+            val alpha = (0.72f + 0.28f * sin(t).toFloat()).coerceIn(0f, 1f)
+            mapRef?.getStyle { style ->
+                (style.getLayer(COUNTRY_FILL_LAYER) as? FillLayer)?.setProperties(
+                    PropertyFactory.fillOpacity(alpha)
+                )
+            }
+            t += 0.08  // ~2.5 second full cycle at 100ms tick
+            delay(100L)
+        }
+    }
+
+    // Update event markers
+    LaunchedEffect(state.eventGeoJson, styleReady) {
+        val src = eventsSource ?: return@LaunchedEffect
+        if (!styleReady) return@LaunchedEffect
+        src.setGeoJson(state.eventGeoJson)
     }
 
     Box(modifier = Modifier.fillMaxSize().background(BgDeep)) {
@@ -160,7 +185,6 @@ fun MapScreen(
             factory = { mapView },
             modifier = Modifier.fillMaxSize(),
         ) { view ->
-            // Guard — getMapAsync callback fires on every recompose; only set up once
             if (mapRef != null) return@AndroidView
             view.getMapAsync { map ->
                 mapRef = map
@@ -170,7 +194,6 @@ fun MapScreen(
                     .zoom(1.5)
                     .build()
 
-                // Cleaner UX: disable rotation (confusing on a world map), hide MapLibre branding
                 map.uiSettings.apply {
                     isRotateGesturesEnabled = false
                     isCompassEnabled = false
@@ -180,21 +203,32 @@ fun MapScreen(
 
                 map.setStyle(Style.Builder().fromUri(DARK_MAP_STYLE)) { style ->
 
-                    // Load raw GeoJSON once from assets (module-level cache after first read)
+                    // Attempt globe projection — gives a spherical earth look
+                    try {
+                        val projClass = Class.forName("org.maplibre.android.style.projection.StyleProjection")
+                        val nameClass = Class.forName("org.maplibre.android.style.projection.StyleProjectionName")
+                        val globeValue = nameClass.enumConstants?.firstOrNull { it.toString().equals("globe", ignoreCase = true) }
+                        if (globeValue != null) {
+                            val constructor = projClass.getConstructor(nameClass)
+                            val projection = constructor.newInstance(globeValue)
+                            style.javaClass.getMethod("setProjection", projClass).invoke(style, projection)
+                        }
+                    } catch (_: Exception) {
+                        // Globe projection not available in this build — flat map is fine
+                    }
+
                     val rawGeoJson = sCachedGeoJson ?: run {
                         try {
                             context.assets.open("countries_simple.geojson")
-                                .readBytes().toString(StandardCharsets.UTF_8)
+                                .readBytes().toString(Charsets.UTF_8)
                                 .also { sCachedGeoJson = it }
                         } catch (_: Exception) { EMPTY_FEATURE_COLLECTION }
                     }
 
-                    // Country fill source — raw GeoJSON, no score data needed here
                     val cSrc = GeoJsonSource(COUNTRIES_SOURCE_ID, rawGeoJson)
                     style.addSource(cSrc)
-                    countriesSource = cSrc
 
-                    // Heatmap fill layer — color driven purely by expression (no GeoJSON mutation)
+                    // Heatmap fill — glistening animation drives opacity via separate LaunchedEffect
                     val fillLayer = FillLayer(COUNTRY_FILL_LAYER, COUNTRIES_SOURCE_ID).apply {
                         setProperties(
                             PropertyFactory.fillColor(buildHeatmapColorExpression(state.scores)),
@@ -203,16 +237,16 @@ fun MapScreen(
                     }
                     style.addLayer(fillLayer)
 
-                    // Subtle country borders
+                    // Country borders
                     val outlineLayer = FillLayer(COUNTRY_OUTLINE_LAYER, COUNTRIES_SOURCE_ID).apply {
                         setProperties(
                             PropertyFactory.fillOpacity(0f),
-                            PropertyFactory.fillOutlineColor(Expression.rgba(255.0, 255.0, 255.0, 0.12)),
+                            PropertyFactory.fillOutlineColor(Expression.rgba(255.0, 255.0, 255.0, 0.15)),
                         )
                     }
                     style.addLayerAbove(outlineLayer, COUNTRY_FILL_LAYER)
 
-                    // Events source + circle layer
+                    // Events source + circles
                     val eSrc = GeoJsonSource(EVENTS_SOURCE_ID, state.eventGeoJson)
                     style.addSource(eSrc)
                     eventsSource = eSrc
@@ -223,39 +257,60 @@ fun MapScreen(
                                 Expression.match(
                                     Expression.get("severity"),
                                     Expression.literal("low"),      Expression.literal(6f),
-                                    Expression.literal("medium"),   Expression.literal(9f),
-                                    Expression.literal("high"),     Expression.literal(14f),
-                                    Expression.literal("critical"), Expression.literal(18f),
-                                    Expression.literal(5f),
+                                    Expression.literal("medium"),   Expression.literal(10f),
+                                    Expression.literal("high"),     Expression.literal(15f),
+                                    Expression.literal("critical"), Expression.literal(20f),
+                                    Expression.literal(7f),
                                 )
                             ),
                             PropertyFactory.circleColor(
                                 Expression.match(
                                     Expression.get("type"),
                                     Expression.literal("conflict"),   Expression.rgb(255.0, 50.0,  50.0),
-                                    Expression.literal("earthquake"), Expression.rgb(255.0, 150.0, 30.0),
-                                    Expression.literal("fire"),       Expression.rgb(255.0, 200.0, 0.0),
+                                    Expression.literal("earthquake"), Expression.rgb(255.0, 165.0, 30.0),
+                                    Expression.literal("fire"),       Expression.rgb(255.0, 210.0, 0.0),
                                     Expression.rgb(160.0, 160.0, 160.0),
                                 )
                             ),
                             PropertyFactory.circleOpacity(0.92f),
-                            PropertyFactory.circleStrokeWidth(1.5f),
+                            PropertyFactory.circleStrokeWidth(1.8f),
                             PropertyFactory.circleStrokeColor(Expression.rgba(0.0, 0.0, 0.0, 0.55)),
-                            PropertyFactory.circleBlur(0.15f),
+                            PropertyFactory.circleBlur(0.1f),
+                            // Pulse-like stroke for visibility
+                            PropertyFactory.circleStrokeOpacity(0.8f),
                         )
                     }
                     style.addLayerAbove(circleLayer, COUNTRY_OUTLINE_LAYER)
 
                     styleReady = true
 
-                    // Fix #4 — use a RectF (~40dp box) instead of a single pixel for hit testing
+                    // Click: check event circles first (smaller target), then country fill
                     map.addOnMapClickListener { point ->
                         val px = map.projection.toScreenLocation(point)
-                        val hitBox = android.graphics.RectF(px.x - 40f, px.y - 40f, px.x + 40f, px.y + 40f)
-                        val features = map.queryRenderedFeatures(hitBox, COUNTRY_FILL_LAYER)
-                        val iso = features.firstOrNull()
+                        // Larger hit box (50dp) catches small countries and events better
+                        val hitBox = android.graphics.RectF(px.x - 50f, px.y - 50f, px.x + 50f, px.y + 50f)
+
+                        // 1. Event circles — tighter box for precision
+                        val eventBox = android.graphics.RectF(px.x - 30f, px.y - 30f, px.x + 30f, px.y + 30f)
+                        val eventFeatures = map.queryRenderedFeatures(eventBox, EVENTS_CIRCLE_LAYER)
+                        if (eventFeatures.isNotEmpty()) {
+                            val f = eventFeatures.first()
+                            val eventInfo = MapEventInfo(
+                                type      = f.getStringProperty("type") ?: "unknown",
+                                severity  = f.getStringProperty("severity") ?: "low",
+                                title     = f.getStringProperty("title") ?: "",
+                                magnitude = f.getNumberProperty("magnitude")?.toDouble() ?: 0.0,
+                            )
+                            vm.selectEvent(eventInfo)
+                            return@addOnMapClickListener true
+                        }
+
+                        // 2. Country fill
+                        val countryFeatures = map.queryRenderedFeatures(hitBox, COUNTRY_FILL_LAYER)
+                        val iso = countryFeatures.firstOrNull()
                             ?.getStringProperty("ISO3166-1-Alpha-2")
                             ?.takeIf { it.isNotBlank() && it != "-99" && it != "-1" }
+
                         if (!iso.isNullOrBlank()) {
                             vm.selectCountry(iso)
                             true
@@ -299,7 +354,7 @@ fun MapScreen(
             )
         }
 
-        // ── Live/Offline indicator — top right ───────────────────────────
+        // ── Server connection indicator — top right ───────────────────────
         Row(
             modifier = Modifier
                 .align(Alignment.TopEnd)
@@ -347,9 +402,26 @@ fun MapScreen(
             }
         }
 
+        // ── Event info card ───────────────────────────────────────────────
+        AnimatedVisibility(
+            visible = state.selectedEvent != null,
+            enter = slideInVertically { it } + fadeIn(),
+            exit = slideOutVertically { it } + fadeOut(),
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(start = 12.dp, end = 12.dp, bottom = 80.dp),
+        ) {
+            state.selectedEvent?.let { event ->
+                EventInfoCard(
+                    event = event,
+                    onDismiss = { vm.selectEvent(null) },
+                )
+            }
+        }
+
         // ── Country info card — slides up on tap ──────────────────────────
         AnimatedVisibility(
-            visible = state.selectedCountry != null,
+            visible = state.selectedCountry != null && state.selectedEvent == null,
             enter = slideInVertically { it } + fadeIn(),
             exit = slideOutVertically { it } + fadeOut(),
             modifier = Modifier
@@ -381,6 +453,81 @@ fun MapScreen(
             elevation = FloatingActionButtonDefaults.elevation(6.dp),
         ) {
             Icon(Icons.Default.Refresh, contentDescription = "Refresh", tint = CyanPrimary)
+        }
+    }
+}
+
+// ── Event info card ───────────────────────────────────────────────────────────
+
+@Composable
+private fun EventInfoCard(
+    event: MapEventInfo,
+    onDismiss: () -> Unit,
+) {
+    val (typeLabel, typeColor) = when (event.type) {
+        "earthquake" -> "Earthquake" to OrangeAlert
+        "fire"       -> "Wildfire"   to Color(0xFFFFD700)
+        "conflict"   -> "Conflict"   to RedCritical
+        else         -> event.type.replaceFirstChar { it.uppercase() } to TextSecondary
+    }
+    val severityColor = when (event.severity) {
+        "low"      -> GreenOk
+        "medium"   -> OrangeAlert
+        "high"     -> Color(0xFFFF6B35)
+        "critical" -> RedCritical
+        else       -> TextSecondary
+    }
+
+    Card(
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = BgElevated),
+        elevation = CardDefaults.cardElevation(defaultElevation = 12.dp),
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column {
+                    Text(
+                        text = typeLabel,
+                        style = MaterialTheme.typography.titleLarge,
+                        color = typeColor,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    Text(
+                        text = event.severity.replaceFirstChar { it.uppercase() },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = severityColor,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
+                IconButton(onClick = onDismiss) {
+                    Icon(Icons.Default.Close, contentDescription = "Dismiss", tint = TextSecondary)
+                }
+            }
+
+            if (event.title.isNotBlank()) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = event.title,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = TextPrimary,
+                    maxLines = 3,
+                )
+            }
+
+            if (event.type == "earthquake" && event.magnitude > 0.0) {
+                Spacer(Modifier.height(8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                    CountryStat(
+                        value = "M%.1f".format(event.magnitude),
+                        label = "magnitude",
+                        color = OrangeAlert,
+                    )
+                }
+            }
         }
     }
 }
@@ -437,7 +584,6 @@ private fun CountryInfoCard(
 
             Spacer(Modifier.height(8.dp))
 
-            // Score bar
             LinearProgressIndicator(
                 progress = { score.coerceIn(0f, 1f) },
                 modifier = Modifier
@@ -459,7 +605,6 @@ private fun CountryInfoCard(
                     }
                 }
             } else {
-                // Loading placeholder
                 Spacer(Modifier.height(10.dp))
                 Text("Loading details…", style = MaterialTheme.typography.bodySmall, color = TextSecondary)
             }
@@ -494,11 +639,6 @@ private fun CountryStat(value: String, label: String, color: Color) {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-/**
- * Build a MapLibre `match` expression that maps ISO_A2 → rgba color.
- * This avoids any GeoJSON mutation — only the layer expression is updated when scores change.
- * Countries not present in [scores] default to fully transparent (dark basemap shows through).
- */
 private fun buildHeatmapColorExpression(scores: Map<String, Float>): Expression {
     if (scores.isEmpty()) return Expression.rgba(0.0, 0.0, 0.0, 0.0)
 
@@ -508,19 +648,23 @@ private fun buildHeatmapColorExpression(scores: Map<String, Float>): Expression 
         parts.add(Expression.literal(iso))
         parts.add(scoreToRgba(score))
     }
-    // Default: transparent → dark basemap shows through where there's no activity
     parts.add(Expression.rgba(0.0, 0.0, 0.0, 0.0))
 
     return Expression.match(*parts.toTypedArray())
 }
 
+/**
+ * Maps a country threat score (0–1) to a rich RGBA color.
+ * Colors shift from cool blue (low activity) through amber and into hot red (critical).
+ * The opacity values are deliberately high to make the glistening animation visible.
+ */
 private fun scoreToRgba(score: Float): Expression = when {
     score <= 0f   -> Expression.rgba(0.0,   0.0,   0.0,   0.0)
-    score < 0.10f -> Expression.rgba(10.0,  30.0,  70.0,  0.45)
-    score < 0.25f -> Expression.rgba(20.0,  50.0,  100.0, 0.60)
-    score < 0.40f -> Expression.rgba(90.0,  45.0,  15.0,  0.68)
-    score < 0.55f -> Expression.rgba(160.0, 65.0,  20.0,  0.75)
-    score < 0.70f -> Expression.rgba(220.0, 85.0,  25.0,  0.82)
-    score < 0.85f -> Expression.rgba(255.0, 40.0,  20.0,  0.88)
-    else          -> Expression.rgba(255.0, 10.0,  10.0,  0.95)
+    score < 0.10f -> Expression.rgba(10.0,  40.0,  120.0, 0.55)
+    score < 0.25f -> Expression.rgba(20.0,  60.0,  160.0, 0.68)
+    score < 0.40f -> Expression.rgba(100.0, 50.0,  10.0,  0.75)
+    score < 0.55f -> Expression.rgba(180.0, 70.0,  15.0,  0.82)
+    score < 0.70f -> Expression.rgba(230.0, 90.0,  20.0,  0.88)
+    score < 0.85f -> Expression.rgba(255.0, 45.0,  15.0,  0.92)
+    else          -> Expression.rgba(255.0, 10.0,  10.0,  0.97)
 }

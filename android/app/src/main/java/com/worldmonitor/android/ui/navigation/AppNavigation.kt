@@ -11,26 +11,17 @@ import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Snackbar
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.navigation.NavDestination.Companion.hierarchy
-import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
-import com.worldmonitor.android.WorldMonitorApp
 import com.worldmonitor.android.ui.screens.EventsScreen
 import com.worldmonitor.android.ui.screens.MapScreen
 import com.worldmonitor.android.ui.screens.NewsScreen
@@ -38,9 +29,7 @@ import com.worldmonitor.android.ui.screens.SettingsScreen
 import com.worldmonitor.android.ui.theme.BgCard
 import com.worldmonitor.android.ui.theme.BgSurface
 import com.worldmonitor.android.ui.theme.CyanPrimary
-import com.worldmonitor.android.ui.theme.OrangeAlert
 import com.worldmonitor.android.ui.theme.TextMuted
-import com.worldmonitor.android.ui.theme.TextPrimary
 
 object Routes {
     const val MAP = "map"
@@ -58,11 +47,6 @@ data class NavItem(val route: String, val label: String, val icon: @Composable (
 @Composable
 fun AppNavigation() {
     val navController = rememberNavController()
-    val context = LocalContext.current
-    val app = context.applicationContext as WorldMonitorApp
-    val serverUrl by app.preferences.serverUrl.collectAsState(initial = "")
-
-    val snackbarHostState = remember { SnackbarHostState() }
 
     val navItems = listOf(
         NavItem(Routes.MAP, "Map") { Icon(Icons.Default.Language, contentDescription = "Map") },
@@ -74,27 +58,10 @@ fun AppNavigation() {
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route
 
-    // If no server URL is configured, nudge the user via snackbar — never block navigation
-    LaunchedEffect(serverUrl) {
-        if (serverUrl.isBlank()) {
-            snackbarHostState.showSnackbar("Set server URL in Settings")
-        }
-    }
-
     Scaffold(
-        snackbarHost = {
-            SnackbarHost(snackbarHostState) { data ->
-                Snackbar(
-                    snackbarData = data,
-                    containerColor = OrangeAlert,
-                    contentColor = TextPrimary,
-                )
-            }
-        },
         bottomBar = {
             NavigationBar(containerColor = BgSurface) {
                 navItems.forEach { item ->
-                    // Match on the base route (strip query params for active-state checks)
                     val baseRoute = currentRoute?.substringBefore("?")
                     val selected = navBackStackEntry?.destination?.hierarchy
                         ?.any { it.route?.substringBefore("?") == item.route } == true
@@ -105,7 +72,8 @@ fun AppNavigation() {
                         selected = selected,
                         onClick = {
                             navController.navigate(item.route) {
-                                popUpTo(navController.graph.findStartDestination().id) {
+                                // Use explicit route string for reliability
+                                popUpTo(Routes.MAP) {
                                     saveState = true
                                 }
                                 launchSingleTop = true
@@ -132,7 +100,9 @@ fun AppNavigation() {
             composable(Routes.MAP) {
                 MapScreen(
                     onCountryClick = { code ->
-                        navController.navigate(Routes.newsWithCountry(code))
+                        navController.navigate(Routes.newsWithCountry(code)) {
+                            launchSingleTop = true
+                        }
                     }
                 )
             }

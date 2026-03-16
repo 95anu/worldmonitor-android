@@ -14,14 +14,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.Error
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Divider
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -37,10 +32,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.worldmonitor.android.data.preferences.AppPreferences
 import com.worldmonitor.android.ui.theme.BgCard
 import com.worldmonitor.android.ui.theme.BgDeep
 import com.worldmonitor.android.ui.theme.BgElevated
@@ -49,13 +45,11 @@ import com.worldmonitor.android.ui.theme.GreenOk
 import com.worldmonitor.android.ui.theme.RedCritical
 import com.worldmonitor.android.ui.theme.TextPrimary
 import com.worldmonitor.android.ui.theme.TextSecondary
-import com.worldmonitor.android.viewmodel.ConnectionStatus
 import com.worldmonitor.android.viewmodel.SettingsViewModel
 
 @Composable
 fun SettingsScreen(vm: SettingsViewModel = viewModel()) {
     val state by vm.uiState.collectAsState()
-    var urlField by remember(state.serverUrl) { mutableStateOf(state.serverUrl) }
     var mapStyleField by remember(state.mapStyleUrl) { mutableStateOf(state.mapStyleUrl) }
 
     Column(
@@ -73,107 +67,44 @@ fun SettingsScreen(vm: SettingsViewModel = viewModel()) {
         )
         Spacer(Modifier.height(20.dp))
 
-        // ── Connection Status ─────────────────────────────────────────────
-        SectionHeader("Connection")
+        // ── Server Connection ─────────────────────────────────────────────
+        SectionHeader("Server Connection")
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(10.dp))
                 .background(BgElevated)
-                .padding(14.dp),
+                .padding(horizontal = 14.dp, vertical = 16.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            val isConnected = state.connectionStatus == ConnectionStatus.SUCCESS
-            val dotColor = when (state.connectionStatus) {
-                ConnectionStatus.SUCCESS -> GreenOk
-                ConnectionStatus.FAILURE -> RedCritical
-                ConnectionStatus.TESTING -> CyanPrimary
-                ConnectionStatus.IDLE -> TextSecondary
-            }
-            val statusLabel = when (state.connectionStatus) {
-                ConnectionStatus.SUCCESS -> "Connected"
-                ConnectionStatus.FAILURE -> "Disconnected"
-                ConnectionStatus.TESTING -> "Testing…"
-                ConnectionStatus.IDLE -> "Not tested"
-            }
+            val bulbColor = if (state.isConnected) GreenOk else RedCritical
+            // Glowing bulb — drop shadow in the bulb colour for glow
             androidx.compose.foundation.layout.Box(
                 modifier = Modifier
-                    .size(10.dp)
+                    .size(14.dp)
+                    .shadow(
+                        elevation = if (state.isConnected) 8.dp else 4.dp,
+                        shape = CircleShape,
+                        ambientColor = bulbColor,
+                        spotColor = bulbColor,
+                    )
                     .clip(CircleShape)
-                    .background(dotColor)
+                    .background(bulbColor)
             )
-            Spacer(Modifier.width(10.dp))
-            Column(modifier = Modifier.weight(1f)) {
+            Spacer(Modifier.width(12.dp))
+            Column {
                 Text(
-                    statusLabel,
+                    text = if (state.isConnected) "Connected to server" else "Server unavailable",
                     style = MaterialTheme.typography.bodyMedium,
-                    color = dotColor,
+                    color = bulbColor,
                     fontWeight = FontWeight.SemiBold,
                 )
-                if (state.connectionStatus == ConnectionStatus.SUCCESS && state.serverUrl.isNotBlank()) {
-                    Text(
-                        state.serverUrl,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = TextSecondary,
-                    )
-                }
-                state.connectionError?.let { err ->
-                    if (state.connectionStatus == ConnectionStatus.FAILURE) {
-                        Text(err, style = MaterialTheme.typography.bodySmall, color = RedCritical)
-                    }
-                }
-            }
-        }
-        Spacer(Modifier.height(20.dp))
-        Divider(color = BgCard)
-        Spacer(Modifier.height(20.dp))
-
-        // ── Server Configuration ──────────────────────────────────────────
-        SectionHeader("Server Configuration")
-        OutlinedTextField(
-            value = urlField,
-            onValueChange = { urlField = it; vm.updateServerUrl(it) },
-            label = { Text("Server URL") },
-            placeholder = { Text("http://192.168.1.100:8000") },
-            singleLine = true,
-            modifier = Modifier
-                .fillMaxWidth()
-                .onFocusChanged { focusState ->
-                    // Auto-save URL on focus-lost if it changed
-                    if (!focusState.isFocused && urlField != state.serverUrl && urlField.isNotBlank()) {
-                        vm.updateServerUrl(urlField)
-                    }
-                },
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedBorderColor = CyanPrimary,
-                unfocusedBorderColor = TextSecondary,
-                focusedLabelColor = CyanPrimary,
-                cursorColor = CyanPrimary,
-            ),
-        )
-        Spacer(Modifier.height(10.dp))
-        Button(
-            onClick = { vm.testAndSaveConnection(urlField) },
-            enabled = state.connectionStatus != ConnectionStatus.TESTING,
-            colors = ButtonDefaults.buttonColors(containerColor = CyanPrimary),
-            shape = RoundedCornerShape(8.dp),
-        ) {
-            if (state.connectionStatus == ConnectionStatus.TESTING) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(16.dp),
-                    strokeWidth = 2.dp,
-                    color = BgDeep,
+                Text(
+                    text = AppPreferences.DEFAULT_SERVER_URL,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextSecondary,
                 )
-                Spacer(Modifier.width(8.dp))
-                Text("Testing…", color = BgDeep, fontWeight = FontWeight.Bold)
-            } else {
-                Text("Test & Save", color = BgDeep, fontWeight = FontWeight.Bold)
             }
-        }
-        when (state.connectionStatus) {
-            ConnectionStatus.SUCCESS -> StatusRow(Icons.Default.CheckCircle, "Connected", GreenOk)
-            ConnectionStatus.FAILURE -> StatusRow(Icons.Default.Error, state.connectionError ?: "Failed", RedCritical)
-            else -> {}
         }
 
         Spacer(Modifier.height(20.dp))
@@ -240,7 +171,7 @@ fun SettingsScreen(vm: SettingsViewModel = viewModel()) {
             color = TextSecondary,
         )
         Text(
-            "Backend: FastAPI + SQLite on Raspberry Pi 4",
+            "Backend: FastAPI + SQLite on Raspberry Pi 4 (via Cloudflare Tunnel)",
             style = MaterialTheme.typography.bodySmall,
             color = TextSecondary,
         )
@@ -256,18 +187,4 @@ private fun SectionHeader(text: String) {
         fontWeight = FontWeight.Bold,
     )
     Spacer(Modifier.height(8.dp))
-}
-
-@Composable
-private fun StatusRow(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    msg: String,
-    tint: androidx.compose.ui.graphics.Color,
-) {
-    Spacer(Modifier.height(4.dp))
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Icon(icon, null, tint = tint, modifier = Modifier.size(16.dp))
-        Spacer(Modifier.width(6.dp))
-        Text(msg, style = MaterialTheme.typography.bodySmall, color = tint)
-    }
 }

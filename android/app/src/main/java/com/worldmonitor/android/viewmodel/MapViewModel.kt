@@ -22,6 +22,13 @@ import kotlinx.coroutines.withContext
 
 private const val EMPTY_FEATURE_COLLECTION = """{"type":"FeatureCollection","features":[]}"""
 
+data class MapEventInfo(
+    val type: String,
+    val severity: String,
+    val title: String,
+    val magnitude: Double,
+)
+
 data class MapUiState(
     val isLoading: Boolean = true,
     val scores: Map<String, Float> = emptyMap(),
@@ -35,6 +42,8 @@ data class MapUiState(
     val selectedCountryScore: Float = 0f,
     val selectedCountryArticles: Int? = null,
     val selectedCountryEvents: Int? = null,
+    // Event point selection
+    val selectedEvent: MapEventInfo? = null,
 )
 
 class MapViewModel(application: Application) : AndroidViewModel(application) {
@@ -101,6 +110,7 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
 
         heatmapResult.fold(
             onSuccess = { heatmap ->
+                app.setServerConnected(true)
                 _uiState.update { state ->
                     state.copy(
                         isLoading = false,
@@ -111,6 +121,7 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
                 }
             },
             onFailure = { err ->
+                app.setServerConnected(false)
                 _uiState.update { it.copy(isLoading = false, error = err.message, isConnected = false) }
             }
         )
@@ -135,10 +146,15 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /** Called when the user taps an event circle on the map. */
+    fun selectEvent(event: MapEventInfo?) {
+        _uiState.update { it.copy(selectedEvent = event, selectedCountry = null, selectedCountryArticles = null, selectedCountryEvents = null) }
+    }
+
     /** Called when the user taps a country on the map. Fetches country detail async. */
     fun selectCountry(iso: String?) {
         if (iso == null) {
-            _uiState.update { it.copy(selectedCountry = null, selectedCountryArticles = null, selectedCountryEvents = null) }
+            _uiState.update { it.copy(selectedCountry = null, selectedCountryArticles = null, selectedCountryEvents = null, selectedEvent = null) }
             return
         }
         _uiState.update {
@@ -147,6 +163,7 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
                 selectedCountryScore = it.scores[iso] ?: 0f,
                 selectedCountryArticles = null,
                 selectedCountryEvents = null,
+                selectedEvent = null,
             )
         }
         viewModelScope.launch {

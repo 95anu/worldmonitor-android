@@ -19,12 +19,13 @@ class AppPreferences(private val context: Context) {
         private val KEY_REFRESH_INTERVAL = intPreferencesKey("refresh_interval_minutes")
         private val KEY_MAP_STYLE = stringPreferencesKey("map_style_url")
 
+        const val DEFAULT_SERVER_URL = "https://api.anuragtech.in"
         const val DEFAULT_MAP_STYLE = "https://demotiles.maplibre.org/style.json"
         const val DEFAULT_REFRESH_INTERVAL = 5
     }
 
     val serverUrl: Flow<String> = context.dataStore.data.map { prefs ->
-        prefs[KEY_SERVER_URL] ?: ""
+        prefs[KEY_SERVER_URL] ?: DEFAULT_SERVER_URL
     }
 
     val refreshInterval: Flow<Int> = context.dataStore.data.map { prefs ->
