@@ -1,0 +1,23 @@
+[Unit]
+Description=WorldMonitor Backend (FastAPI)
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__USER__
+WorkingDirectory=__SCRIPT_DIR__
+EnvironmentFile=__SCRIPT_DIR__/.env
+ExecStart=__VENV_DIR__/bin/python -m uvicorn main:app --host 0.0.0.0 --port 8000 --no-access-log
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=worldmonitor-backend
+
+# Resource limits suitable for Pi 4
+MemoryMax=512M
+CPUQuota=80%
+
+[Install]
+WantedBy=multi-user.target
