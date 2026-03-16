@@ -220,13 +220,13 @@ fun MapScreen(
                     val circleLayer = CircleLayer(EVENTS_CIRCLE_LAYER, EVENTS_SOURCE_ID).apply {
                         setProperties(
                             PropertyFactory.circleRadius(
-                                Expression.step(
+                                Expression.match(
                                     Expression.get("severity"),
+                                    Expression.literal("low"),      Expression.literal(6f),
+                                    Expression.literal("medium"),   Expression.literal(9f),
+                                    Expression.literal("high"),     Expression.literal(14f),
+                                    Expression.literal("critical"), Expression.literal(18f),
                                     Expression.literal(5f),
-                                    Expression.stop("low", 6f),
-                                    Expression.stop("medium", 9f),
-                                    Expression.stop("high", 14f),
-                                    Expression.stop("critical", 18f),
                                 )
                             ),
                             PropertyFactory.circleColor(
