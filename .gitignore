@@ -8,13 +8,16 @@ android/local.properties
 *.ap_
 
 # Python
-backend/__pycache__/
-backend/*.pyc
-backend/.venv/
-backend/venv/
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
 backend/*.db
 backend/*.sqlite
 backend/*.sqlite3
+backend/*.db-shm
+backend/*.db-wal
 backend/.env
 
 # IDE
