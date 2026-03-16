@@ -84,7 +84,6 @@ import org.maplibre.android.maps.Style
 import org.maplibre.android.style.expressions.Expression
 import org.maplibre.android.style.layers.FillLayer
 import org.maplibre.android.style.layers.PropertyFactory
-import org.maplibre.android.style.layers.SkyLayer
 import org.maplibre.android.style.layers.SymbolLayer
 import org.maplibre.android.style.sources.GeoJsonSource
 import kotlin.math.sin
@@ -256,16 +255,6 @@ fun MapScreen(
                         if (globe != null)
                             style.javaClass.getMethod("setProjection", pCls)
                                 .invoke(style, pCls.getConstructor(nCls).newInstance(globe))
-                    } catch (_: Exception) {}
-
-                    // ── Sky / atmosphere (gives the planet-in-space look) ─
-                    try {
-                        val sky = SkyLayer("sky-atmosphere")
-                        sky.setProperties(
-                            PropertyFactory.skyType("atmosphere"),
-                            PropertyFactory.skyAtmosphereSunIntensity(12.0f),
-                        )
-                        style.addLayer(sky)
                     } catch (_: Exception) {}
 
                     // ── Country fill ──────────────────────────────────────
