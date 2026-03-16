@@ -36,7 +36,7 @@ class WorldMonitorApp : Application() {
     override fun onCreate() {
         super.onCreate()
         preferences = AppPreferences(this)
-        // Always enforce the Cloudflare tunnel endpoint — overrides any previously stored URL
+        // Always enforce the configured endpoint — overrides any previously stored URL
         applicationScope.launch {
             preferences.setServerUrl(AppPreferences.DEFAULT_SERVER_URL)
         }

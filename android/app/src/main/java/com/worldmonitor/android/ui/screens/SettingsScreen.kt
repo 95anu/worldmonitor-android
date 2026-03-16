@@ -36,7 +36,6 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.worldmonitor.android.data.preferences.AppPreferences
 import com.worldmonitor.android.ui.theme.BgCard
 import com.worldmonitor.android.ui.theme.BgDeep
 import com.worldmonitor.android.ui.theme.BgElevated
@@ -100,7 +99,7 @@ fun SettingsScreen(vm: SettingsViewModel = viewModel()) {
                     fontWeight = FontWeight.SemiBold,
                 )
                 Text(
-                    text = AppPreferences.DEFAULT_SERVER_URL,
+                    text = "Private server",
                     style = MaterialTheme.typography.bodySmall,
                     color = TextSecondary,
                 )
@@ -166,12 +165,17 @@ fun SettingsScreen(vm: SettingsViewModel = viewModel()) {
             color = TextPrimary,
         )
         Text(
-            "Inspired by github.com/koala73/worldmonitor",
+            "Made by Anurag T",
             style = MaterialTheme.typography.bodySmall,
             color = TextSecondary,
         )
         Text(
-            "Backend: FastAPI + SQLite on Raspberry Pi 4 (via Cloudflare Tunnel)",
+            "Stack: Kotlin · Jetpack Compose · FastAPI · Python · MapLibre",
+            style = MaterialTheme.typography.bodySmall,
+            color = TextSecondary,
+        )
+        Text(
+            "Backend hosted on a private server",
             style = MaterialTheme.typography.bodySmall,
             color = TextSecondary,
         )

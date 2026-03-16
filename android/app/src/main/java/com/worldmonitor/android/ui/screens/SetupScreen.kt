@@ -23,7 +23,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.worldmonitor.android.data.preferences.AppPreferences
 import com.worldmonitor.android.ui.theme.BgDeep
 import com.worldmonitor.android.ui.theme.CyanPrimary
 import com.worldmonitor.android.ui.theme.TextSecondary
@@ -53,7 +52,7 @@ fun SetupScreen(onConnected: () -> Unit, vm: SettingsViewModel = viewModel()) {
             Text("WorldMonitor", style = MaterialTheme.typography.displayLarge)
             Spacer(Modifier.height(8.dp))
             Text(
-                AppPreferences.DEFAULT_SERVER_URL,
+                "Connecting to server…",
                 style = MaterialTheme.typography.bodyMedium,
                 textAlign = TextAlign.Center,
                 color = TextSecondary,
@@ -62,7 +61,7 @@ fun SetupScreen(onConnected: () -> Unit, vm: SettingsViewModel = viewModel()) {
             CircularProgressIndicator(color = CyanPrimary)
             Spacer(Modifier.height(16.dp))
             Text(
-                "Connecting via Cloudflare Tunnel…",
+                "Please wait",
                 style = MaterialTheme.typography.bodySmall,
                 textAlign = TextAlign.Center,
                 color = TextSecondary,
