@@ -197,7 +197,18 @@ fun MapScreen(
             }
         }
         lifecycle.addObserver(observer)
-        onDispose { lifecycle.removeObserver(observer) }
+        // Catch up with current Activity state — events already fired before observer registered,
+        // and also re-start MapLibre when returning from another screen (Activity never pauses
+        // during in-app navigation, so the observer alone won't resume the MapView).
+        if (lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED))  mapView.onStart()
+        if (lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) mapView.onResume()
+        onDispose {
+            lifecycle.removeObserver(observer)
+            // Explicitly pause/stop so MapLibre's gesture detector resets properly
+            // when the composable leaves composition during navigation.
+            mapView.onPause()
+            mapView.onStop()
+        }
     }
 
     LaunchedEffect(state.scores, styleReady) {
