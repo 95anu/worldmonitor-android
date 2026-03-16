@@ -258,16 +258,6 @@ fun MapScreen(
 
                 map.setStyle(Style.Builder().fromUri(DARK_MAP_STYLE)) { style ->
 
-                    // ── Globe projection ──────────────────────────────────
-                    try {
-                        val pCls = Class.forName("org.maplibre.android.style.projection.StyleProjection")
-                        val nCls = Class.forName("org.maplibre.android.style.projection.StyleProjectionName")
-                        val globe = nCls.enumConstants?.firstOrNull { it.toString().equals("globe", ignoreCase = true) }
-                        if (globe != null)
-                            style.javaClass.getMethod("setProjection", pCls)
-                                .invoke(style, pCls.getConstructor(nCls).newInstance(globe))
-                    } catch (_: Exception) {}
-
                     // ── Country fill ──────────────────────────────────────
                     val rawGeoJson = sCachedGeoJson ?: run {
                         try { context.assets.open("countries_simple.geojson").readBytes()
