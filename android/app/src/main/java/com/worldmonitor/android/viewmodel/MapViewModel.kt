@@ -7,6 +7,7 @@ import com.worldmonitor.android.WorldMonitorApp
 import com.worldmonitor.android.data.models.EventItem
 import com.worldmonitor.android.data.models.StatsResponse
 import com.worldmonitor.android.data.models.WsMessage
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -17,6 +18,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 private const val EMPTY_FEATURE_COLLECTION = """{"type":"FeatureCollection","features":[]}"""
 
@@ -28,6 +30,11 @@ data class MapUiState(
     val lastUpdated: String? = null,
     val eventGeoJson: String = EMPTY_FEATURE_COLLECTION,
     val isConnected: Boolean = false,
+    // Country selection
+    val selectedCountry: String? = null,
+    val selectedCountryScore: Float = 0f,
+    val selectedCountryArticles: Int? = null,
+    val selectedCountryEvents: Int? = null,
 )
 
 class MapViewModel(application: Application) : AndroidViewModel(application) {
@@ -44,7 +51,6 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
     private var liveJob: Job? = null
 
     init {
-        // Keep refresh-interval seconds in sync with preferences
         viewModelScope.launch {
             app.preferences.refreshInterval.map { minutes -> minutes * 60 }.collect { secs ->
                 _refreshIntervalSeconds.value = secs
@@ -115,12 +121,10 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
 
         eventsResult.fold(
             onSuccess = { events ->
-                val geoJson = buildEventGeoJson(events)
+                val geoJson = withContext(Dispatchers.Default) { buildEventGeoJson(events) }
                 _uiState.update { it.copy(eventGeoJson = geoJson) }
             },
-            onFailure = {
-                // Events failing does not mark as disconnected — heatmap drives that
-            }
+            onFailure = { /* events don't block the heatmap */ }
         )
     }
 
@@ -128,6 +132,34 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val url = app.preferences.serverUrl.first()
             if (url.isNotBlank()) loadData(url)
+        }
+    }
+
+    /** Called when the user taps a country on the map. Fetches country detail async. */
+    fun selectCountry(iso: String?) {
+        if (iso == null) {
+            _uiState.update { it.copy(selectedCountry = null, selectedCountryArticles = null, selectedCountryEvents = null) }
+            return
+        }
+        _uiState.update {
+            it.copy(
+                selectedCountry = iso,
+                selectedCountryScore = it.scores[iso] ?: 0f,
+                selectedCountryArticles = null,
+                selectedCountryEvents = null,
+            )
+        }
+        viewModelScope.launch {
+            val url = app.preferences.serverUrl.first()
+            if (url.isBlank()) return@launch
+            app.buildRepository(url).getCountryDetail(iso).onSuccess { detail ->
+                _uiState.update {
+                    it.copy(
+                        selectedCountryArticles = detail.articles24h,
+                        selectedCountryEvents = detail.events7d,
+                    )
+                }
+            }
         }
     }
 
@@ -141,9 +173,7 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
         return """{"type":"FeatureCollection","features":[$features]}"""
     }
 
-    // Expose as a public companion so the StateFlow init lambda can reference it
     private companion object {
-        const val DEFAULT_REFRESH_INTERVAL_SECONDS = 300 // 5 minutes fallback
+        const val DEFAULT_REFRESH_INTERVAL_SECONDS = 300
     }
 }
-
