@@ -79,7 +79,6 @@ import org.maplibre.android.style.layers.CircleLayer
 import org.maplibre.android.style.layers.FillLayer
 import org.maplibre.android.style.layers.PropertyFactory
 import org.maplibre.android.style.sources.GeoJsonSource
-import java.util.Locale
 import kotlin.math.sin
 
 private const val DARK_MAP_STYLE    = "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json"
@@ -326,18 +325,17 @@ fun MapScreen(
 
                     vm.mapStyleReady.value = true
 
-                    // Auto-centre on user's country (once, on first load)
+                    // Auto-centre on India at a wide zoom on first load
                     if (!vm.hasSetInitialCamera) {
                         vm.hasSetInitialCamera = true
-                        val userIso = Locale.getDefault().country.uppercase()
-                        val centroid = COUNTRY_CENTROIDS[userIso]
-                        if (centroid != null) {
-                            map.animateCamera(
-                                CameraUpdateFactory.newCameraPosition(
-                                    CameraPosition.Builder().target(centroid).zoom(3.5).build()
-                                ), 1800
-                            )
-                        }
+                        map.animateCamera(
+                            CameraUpdateFactory.newCameraPosition(
+                                CameraPosition.Builder()
+                                    .target(LatLng(20.59, 78.96)) // India centroid
+                                    .zoom(2.2)
+                                    .build()
+                            ), 1800
+                        )
                     }
 
                     // Click handler: events first, then countries

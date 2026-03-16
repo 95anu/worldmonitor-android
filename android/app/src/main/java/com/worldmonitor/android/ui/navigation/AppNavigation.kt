@@ -100,8 +100,10 @@ fun AppNavigation() {
             composable(Routes.MAP) {
                 MapScreen(
                     onCountryClick = { code ->
+                        // Always pop any existing news screen first so the country filter
+                        // is never silently reused from a previous navigation
                         navController.navigate(Routes.newsWithCountry(code)) {
-                            launchSingleTop = true
+                            popUpTo(Routes.MAP)
                         }
                     }
                 )
