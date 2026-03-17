@@ -9,15 +9,18 @@ import android.graphics.RadialGradient
 import android.graphics.Shader
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -43,7 +46,6 @@ import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.FloatingActionButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
@@ -59,6 +61,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
@@ -73,7 +76,9 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.worldmonitor.android.ui.theme.BgCard
 import com.worldmonitor.android.ui.theme.BgDeep
 import com.worldmonitor.android.ui.theme.BgElevated
+import com.worldmonitor.android.ui.theme.BgSurface
 import com.worldmonitor.android.ui.theme.CyanPrimary
+import com.worldmonitor.android.ui.theme.GlassBorder
 import com.worldmonitor.android.ui.theme.GreenOk
 import com.worldmonitor.android.ui.theme.RedCritical
 import com.worldmonitor.android.ui.theme.TextPrimary
@@ -239,6 +244,21 @@ fun MapScreen(
         }
     }
 
+    // Heatmap breathing — very slow intensity oscillation for organic feel
+    LaunchedEffect(styleReady) {
+        if (!styleReady) return@LaunchedEffect
+        var t = 0.0
+        while (true) {
+            val intensity = (1.0f + 0.12f * sin(t).toFloat())
+            mapRef?.getStyle { style ->
+                (style.getLayer(HEATMAP_LAYER) as? HeatmapLayer)?.setProperties(
+                    PropertyFactory.heatmapIntensity(intensity)
+                )
+            }
+            t += 0.006; delay(160L)
+        }
+    }
+
     // Keep event source in sync when initial GeoJSON loads
     LaunchedEffect(state.eventGeoJson, styleReady) {
         if (!styleReady) return@LaunchedEffect
@@ -387,6 +407,8 @@ fun MapScreen(
                                 title     = f.getStringProperty("title") ?: "",
                                 magnitude = f.getNumberProperty("magnitude")?.toDouble() ?: 0.0,
                             ))
+                            // Gently drift camera to tapped event
+                            map.animateCamera(CameraUpdateFactory.newLatLng(point), 500)
                             return@addOnMapClickListener true
                         }
 
@@ -444,16 +466,16 @@ fun MapScreen(
         // ── Event info card ────────────────────────────────────────────────
         AnimatedVisibility(
             visible = state.selectedEvent != null,
-            enter   = slideInVertically { it } + fadeIn(),
-            exit    = slideOutVertically { it } + fadeOut(),
+            enter   = slideInVertically(spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium)) { it } + fadeIn(tween(180)),
+            exit    = slideOutVertically(tween(200)) { it } + fadeOut(tween(180)),
             modifier = Modifier.align(Alignment.BottomCenter).padding(start = 12.dp, end = 12.dp, bottom = 80.dp),
         ) { state.selectedEvent?.let { EventInfoCard(it) { vm.selectEvent(null) } } }
 
         // ── Country info card ──────────────────────────────────────────────
         AnimatedVisibility(
             visible = state.selectedCountry != null && state.selectedEvent == null,
-            enter   = slideInVertically { it } + fadeIn(),
-            exit    = slideOutVertically { it } + fadeOut(),
+            enter   = slideInVertically(spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium)) { it } + fadeIn(tween(180)),
+            exit    = slideOutVertically(tween(200)) { it } + fadeOut(tween(180)),
             modifier = Modifier.align(Alignment.BottomCenter).padding(start = 12.dp, end = 12.dp, bottom = 80.dp),
         ) {
             state.selectedCountry?.let { iso ->
@@ -706,7 +728,12 @@ private fun IntelTopBar(
             .fillMaxWidth()
             .padding(horizontal = 12.dp, vertical = 8.dp)
             .clip(RoundedCornerShape(12.dp))
-            .background(BgElevated.copy(alpha = 0.92f))
+            .background(
+                Brush.verticalGradient(
+                    listOf(BgElevated.copy(alpha = 0.97f), BgSurface.copy(alpha = 0.99f))
+                )
+            )
+            .border(1.dp, GlassBorder, RoundedCornerShape(12.dp))
             .padding(horizontal = 14.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -745,7 +772,12 @@ private fun TimeFilterOverlay(hours: Int, onHoursChange: (Int) -> Unit) {
             .fillMaxWidth()
             .padding(horizontal = 12.dp)
             .clip(RoundedCornerShape(12.dp))
-            .background(BgElevated.copy(alpha = 0.92f))
+            .background(
+                Brush.verticalGradient(
+                    listOf(BgElevated.copy(alpha = 0.97f), BgSurface.copy(alpha = 0.99f))
+                )
+            )
+            .border(1.dp, GlassBorder, RoundedCornerShape(12.dp))
             .padding(horizontal = 16.dp, vertical = 10.dp),
     ) {
         Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
@@ -796,7 +828,12 @@ private fun EventInfoCard(event: MapEventInfo, onDismiss: () -> Unit) {
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
-            .background(BgElevated.copy(alpha = 0.96f))
+            .background(
+                Brush.verticalGradient(
+                    listOf(BgElevated.copy(alpha = 0.98f), BgSurface.copy(alpha = 0.99f))
+                )
+            )
+            .border(1.dp, GlassBorder, RoundedCornerShape(16.dp))
             .padding(horizontal = 16.dp, vertical = 14.dp),
     ) {
         Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
@@ -846,7 +883,12 @@ private fun CountryInfoCard(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
-            .background(BgElevated.copy(alpha = 0.96f))
+            .background(
+                Brush.verticalGradient(
+                    listOf(BgElevated.copy(alpha = 0.98f), BgSurface.copy(alpha = 0.99f))
+                )
+            )
+            .border(1.dp, GlassBorder, RoundedCornerShape(16.dp))
             .padding(horizontal = 16.dp, vertical = 14.dp),
     ) {
         Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
@@ -859,12 +901,25 @@ private fun CountryInfoCard(
             IconButton(onClick = onDismiss) { Icon(Icons.Default.Close, null, tint = TextSecondary) }
         }
         Spacer(Modifier.height(8.dp))
-        LinearProgressIndicator(
-            progress     = { score.coerceIn(0f, 1f) },
-            modifier     = Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(2.dp)),
-            color        = statusTint,
-            trackColor   = BgCard,
-        )
+        // Gradient severity bar
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(4.dp)
+                .clip(RoundedCornerShape(2.dp))
+                .background(BgCard)
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth(score.coerceIn(0f, 1f))
+                    .height(4.dp)
+                    .background(
+                        Brush.horizontalGradient(
+                            listOf(statusTint.copy(alpha = 0.5f), statusTint)
+                        )
+                    )
+            )
+        }
         if (articles24h != null || events7d != null) {
             Spacer(Modifier.height(12.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(20.dp)) {

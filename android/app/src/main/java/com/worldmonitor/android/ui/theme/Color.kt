@@ -32,3 +32,18 @@ val SeverityLow = Color(0xFF2A4A6E)      // dim navy
 val SeverityMedium = Color(0xFF1E52A0)   // medium navy
 val SeverityHigh = Color(0xFF3A7AE4)     // bright navy
 val SeverityCritical = Color(0xFF5F9CF5) // brightest quiet navy
+
+// Glass / depth system
+val GlassBorder = Color(0x14FFFFFF)      // white 8% — 1dp glass border
+val GlassHighlight = Color(0x0AFFFFFF)   // white 4% — inner glow tint
+
+// Glow overlays
+val CyanGlow = Color(0x2600E5FF)         // cyan 15% — node halo
+val RedGlow = Color(0x26FF1744)          // red 15% — critical glow
+
+// Floating nav pill
+val NavPill = Color(0xF2111B2E)          // near-opaque elevated surface
+
+// Skeleton shimmer
+val SkeletonBase = Color(0xFF111B2E)
+val SkeletonHighlight = Color(0xFF1C2E45)
