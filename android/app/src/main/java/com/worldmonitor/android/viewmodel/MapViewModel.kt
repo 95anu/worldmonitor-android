@@ -20,11 +20,12 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import org.maplibre.android.maps.MapView
 import org.maplibre.android.maps.MapLibreMap
+import org.maplibre.android.maps.MapView
 import org.maplibre.android.style.sources.GeoJsonSource
 
 private const val EMPTY_FEATURE_COLLECTION = """{"type":"FeatureCollection","features":[]}"""
+const val PULSE_FRAMES = 6
 
 data class MapEventInfo(
     val type: String,
@@ -46,6 +47,8 @@ data class MapUiState(
     val selectedCountryArticles: Int? = null,
     val selectedCountryEvents: Int? = null,
     val selectedEvent: MapEventInfo? = null,
+    val timeFilterHours: Int = 168,
+    val showTimeSlider: Boolean = false,
 )
 
 class MapViewModel(application: Application) : AndroidViewModel(application) {
@@ -57,14 +60,17 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
     private val _refreshIntervalSeconds = MutableStateFlow(DEFAULT_REFRESH_INTERVAL_SECONDS)
     val refreshIntervalSeconds: StateFlow<Int> = _refreshIntervalSeconds.asStateFlow()
 
-    // ── MapView stored at ViewModel scope ─────────────────────────────────────
-    // This survives composable disposal during navigation so the map never
-    // needs a full re-initialisation when the user returns to the map screen.
     private var _mapView: MapView? = null
     val mapLibreMap = MutableStateFlow<MapLibreMap?>(null)
     val mapStyleReady = MutableStateFlow(false)
     var eventsSource: GeoJsonSource? = null
-    var hasSetInitialCamera: Boolean = false  // animate to locale country only once
+    var hasSetInitialCamera: Boolean = false
+
+    // ── Event data + pulse animation ──────────────────────────────────────────
+    private var _allEvents: List<EventItem> = emptyList()
+    private var pulseFrame = 0
+    private var pulseJob: Job? = null
+    private var filterJob: Job? = null
 
     fun getOrCreateMapView(context: Context): MapView =
         _mapView ?: MapView(context.applicationContext).also {
@@ -74,8 +80,54 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
 
     override fun onCleared() {
         super.onCleared()
+        pulseJob?.cancel()
+        filterJob?.cancel()
         _mapView?.run { onPause(); onStop(); onDestroy() }
         _mapView = null
+    }
+
+    /** Start the 220ms frame clock that animates pulse rings on event nodes. */
+    fun startPulseClock() {
+        pulseJob?.cancel()
+        pulseJob = viewModelScope.launch {
+            while (true) {
+                delay(220L)
+                pulseFrame = (pulseFrame + 1) % PULSE_FRAMES
+                val src = eventsSource ?: continue
+                if (_allEvents.isEmpty()) continue
+                val geoJson = withContext(Dispatchers.Default) {
+                    buildEventGeoJson(getFilteredEvents(), pulseFrame)
+                }
+                src.setGeoJson(geoJson)
+            }
+        }
+    }
+
+    fun toggleTimeSlider() {
+        _uiState.update { it.copy(showTimeSlider = !it.showTimeSlider) }
+    }
+
+    fun onTimeSliderChange(hours: Int) {
+        _uiState.update { it.copy(timeFilterHours = hours) }
+        filterJob?.cancel()
+        filterJob = viewModelScope.launch {
+            delay(80L)
+            val geoJson = withContext(Dispatchers.Default) {
+                buildEventGeoJson(getFilteredEvents(), pulseFrame)
+            }
+            eventsSource?.setGeoJson(geoJson)
+        }
+    }
+
+    private fun getFilteredEvents(): List<EventItem> {
+        val cutoffMs = System.currentTimeMillis() - _uiState.value.timeFilterHours * 3_600_000L
+        return _allEvents.filter { event ->
+            val ts = event.occurredAt ?: return@filter true
+            try {
+                val ms = java.time.ZonedDateTime.parse(ts).toInstant().toEpochMilli()
+                ms >= cutoffMs
+            } catch (_: Exception) { true }
+        }
     }
 
     // ── Data loading ──────────────────────────────────────────────────────────
@@ -145,7 +197,10 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
 
         eventsResult.fold(
             onSuccess = { events ->
-                val geoJson = withContext(Dispatchers.Default) { buildEventGeoJson(events) }
+                _allEvents = events
+                val geoJson = withContext(Dispatchers.Default) {
+                    buildEventGeoJson(getFilteredEvents(), pulseFrame)
+                }
                 _uiState.update { it.copy(eventGeoJson = geoJson) }
             },
             onFailure = {}
@@ -168,7 +223,7 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
             _uiState.update { it.copy(selectedCountry = null, selectedCountryArticles = null, selectedCountryEvents = null, selectedEvent = null) }
             return
         }
-        _uiState.update { it.copy(selectedCountry = iso, selectedCountryScore = it.scores[iso] ?: 0f, selectedCountryArticles = null, selectedCountryEvents = null, selectedEvent = null) }
+        _uiState.update { it.copy(selectedCountry = iso, selectedCountryScore = _uiState.value.scores[iso] ?: 0f, selectedCountryArticles = null, selectedCountryEvents = null, selectedEvent = null) }
         viewModelScope.launch {
             val url = app.preferences.serverUrl.first()
             if (url.isBlank()) return@launch
@@ -178,12 +233,34 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private fun buildEventGeoJson(events: List<EventItem>): String {
-        val features = events.filter { it.lat != null && it.lon != null }.joinToString(",") { e ->
-            val t = e.title.replace("\"", "'")
-            """{"type":"Feature","geometry":{"type":"Point","coordinates":[${e.lon},${e.lat}]},"properties":{"type":"${e.type}","severity":"${e.severity}","title":"$t","magnitude":${e.magnitude ?: 0.0}}}"""
+    fun buildEventGeoJson(events: List<EventItem>, frame: Int): String {
+        val nowMs = System.currentTimeMillis()
+        val filtered = events.filter { it.lat != null && it.lon != null }
+        val sb = StringBuilder(maxOf(filtered.size * 320, 60))
+        sb.append("""{"type":"FeatureCollection","features":[""")
+        var first = true
+        filtered.forEach { e ->
+            if (!first) sb.append(',')
+            first = false
+            val safeTitle = e.title.replace("\"", "'")
+            val hoursAgo = e.occurredAt?.let {
+                try {
+                    val ms = java.time.ZonedDateTime.parse(it).toInstant().toEpochMilli()
+                    ((nowMs - ms) / 3_600_000L).toInt().coerceIn(0, 168)
+                } catch (_: Exception) { 84 }
+            } ?: 84
+            val sevScore = when (e.severity) {
+                "low" -> 0.20f; "medium" -> 0.45f; "high" -> 0.72f; "critical" -> 0.95f; else -> 0.20f
+            }
+            val typeKey = when (e.type) {
+                "earthquake", "fire", "conflict" -> e.type
+                else -> "default"
+            }
+            val iconName = "pulse_${typeKey}_f$frame"
+            sb.append("""{"type":"Feature","geometry":{"type":"Point","coordinates":[${e.lon},${e.lat}]},"properties":{"type":"${e.type}","severity":"${e.severity}","severity_score":$sevScore,"title":"$safeTitle","magnitude":${e.magnitude ?: 0.0},"hours_ago":$hoursAgo,"icon_name":"$iconName"}}""")
         }
-        return """{"type":"FeatureCollection","features":[$features]}"""
+        sb.append("]}")
+        return sb.toString()
     }
 
     private companion object {

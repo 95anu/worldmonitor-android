@@ -8,6 +8,11 @@ import android.graphics.Path
 import android.graphics.RadialGradient
 import android.graphics.Shader
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
@@ -30,10 +35,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Article
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.FloatingActionButtonDefaults
@@ -41,6 +45,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -56,6 +62,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -63,18 +70,17 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.worldmonitor.android.ui.components.StatsBar
 import com.worldmonitor.android.ui.theme.BgCard
 import com.worldmonitor.android.ui.theme.BgDeep
 import com.worldmonitor.android.ui.theme.BgElevated
 import com.worldmonitor.android.ui.theme.CyanPrimary
 import com.worldmonitor.android.ui.theme.GreenOk
-import com.worldmonitor.android.ui.theme.OrangeAlert
 import com.worldmonitor.android.ui.theme.RedCritical
 import com.worldmonitor.android.ui.theme.TextPrimary
 import com.worldmonitor.android.ui.theme.TextSecondary
 import com.worldmonitor.android.viewmodel.MapEventInfo
 import com.worldmonitor.android.viewmodel.MapViewModel
+import com.worldmonitor.android.viewmodel.PULSE_FRAMES
 import kotlinx.coroutines.delay
 import org.maplibre.android.MapLibre
 import org.maplibre.android.camera.CameraPosition
@@ -83,6 +89,7 @@ import org.maplibre.android.geometry.LatLng
 import org.maplibre.android.maps.Style
 import org.maplibre.android.style.expressions.Expression
 import org.maplibre.android.style.layers.FillLayer
+import org.maplibre.android.style.layers.HeatmapLayer
 import org.maplibre.android.style.layers.HillshadeLayer
 import org.maplibre.android.style.layers.PropertyFactory
 import org.maplibre.android.style.layers.SymbolLayer
@@ -98,13 +105,9 @@ private const val COUNTRIES_SOURCE = "countries-source"
 private const val EVENTS_SOURCE    = "events-source"
 private const val COUNTRY_FILL     = "country-fill"
 private const val COUNTRY_OUTLINE  = "country-fill-outline"
+private const val HEATMAP_LAYER    = "events-heatmap"
 private const val EVENTS_SYMBOLS   = "events-symbols"
 private const val EMPTY_FC         = """{"type":"FeatureCollection","features":[]}"""
-
-private const val ICON_EARTHQUAKE = "icon-earthquake"
-private const val ICON_FIRE       = "icon-fire"
-private const val ICON_CONFLICT   = "icon-conflict"
-private const val ICON_DEFAULT    = "icon-default"
 
 private var sCachedGeoJson: String? = null
 
@@ -202,20 +205,16 @@ fun MapScreen(
             }
         }
         lifecycle.addObserver(observer)
-        // Catch up with current Activity state — events already fired before observer registered,
-        // and also re-start MapLibre when returning from another screen (Activity never pauses
-        // during in-app navigation, so the observer alone won't resume the MapView).
         if (lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED))  mapView.onStart()
         if (lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) mapView.onResume()
         onDispose {
             lifecycle.removeObserver(observer)
-            // Explicitly pause/stop so MapLibre's gesture detector resets properly
-            // when the composable leaves composition during navigation.
             mapView.onPause()
             mapView.onStop()
         }
     }
 
+    // Update country heatmap colors when scores arrive
     LaunchedEffect(state.scores, styleReady) {
         if (!styleReady) return@LaunchedEffect
         mapRef?.getStyle { style ->
@@ -225,6 +224,7 @@ fun MapScreen(
         }
     }
 
+    // Slow-pulse country fill opacity
     LaunchedEffect(styleReady) {
         if (!styleReady) return@LaunchedEffect
         var t = 0.0
@@ -235,13 +235,19 @@ fun MapScreen(
                     PropertyFactory.fillOpacity(alpha)
                 )
             }
-            t += 0.018; delay(100L)
+            t += 0.010; delay(100L)
         }
     }
 
+    // Keep event source in sync when initial GeoJSON loads
     LaunchedEffect(state.eventGeoJson, styleReady) {
         if (!styleReady) return@LaunchedEffect
         vm.eventsSource?.setGeoJson(state.eventGeoJson)
+    }
+
+    // Start pulse animation clock once style is ready
+    LaunchedEffect(styleReady) {
+        if (styleReady) vm.startPulseClock()
     }
 
     Box(modifier = Modifier.fillMaxSize().background(BgDeep)) {
@@ -258,12 +264,14 @@ fun MapScreen(
                     isAttributionEnabled    = false
                 }
 
+                map.setMinZoomPreference(0.5)
+
                 map.cameraPosition = CameraPosition.Builder()
-                    .target(LatLng(20.0, 0.0)).zoom(1.5).build()
+                    .target(LatLng(20.0, 0.0)).zoom(1.2).build()
 
                 map.setStyle(Style.Builder().fromUri(DARK_MAP_STYLE)) { style ->
 
-                    // ── Terrain hillshade (beneath all data layers) ────────
+                    // ── Terrain hillshade ──────────────────────────────────
                     val terrainTiles = TileSet("2.2.0",
                         "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"
                     ).apply {
@@ -278,13 +286,13 @@ fun MapScreen(
                             PropertyFactory.hillshadeIlluminationAnchor("map"),
                             PropertyFactory.hillshadeExaggeration(0.28f),
                             PropertyFactory.hillshadeHighlightColor(
-                                android.graphics.Color.argb(90, 95, 156, 244)   // bright navy — lit slopes
+                                android.graphics.Color.argb(90, 95, 156, 244)
                             ),
                             PropertyFactory.hillshadeShadowColor(
-                                android.graphics.Color.argb(140, 4, 12, 38)     // near-black navy — shadow
+                                android.graphics.Color.argb(140, 4, 12, 38)
                             ),
                             PropertyFactory.hillshadeAccentColor(
-                                android.graphics.Color.argb(55, 26, 70, 160)    // medium navy — mid-tones
+                                android.graphics.Color.argb(55, 26, 70, 160)
                             ),
                         )
                     })
@@ -314,50 +322,52 @@ fun MapScreen(
                     style.addSource(eSrc)
                     vm.eventsSource = eSrc
 
-                    // ── 3D orb icons ──────────────────────────────────────
-                    style.addImage(ICON_EARTHQUAKE, makeOrbIcon(OrbType.EARTHQUAKE))
-                    style.addImage(ICON_FIRE,       makeOrbIcon(OrbType.FIRE))
-                    style.addImage(ICON_CONFLICT,   makeOrbIcon(OrbType.CONFLICT))
-                    style.addImage(ICON_DEFAULT,    makeOrbIcon(OrbType.DEFAULT))
+                    // ── Register all pulse icon frames (4 types × 6 frames) ──
+                    registerAllPulseIcons(style)
 
-                    // ── Symbol layer (replaces flat circles) ──────────────
+                    // ── Heatmap layer (overview, fades out at z≥9) ────────
+                    style.addLayerAbove(buildHeatmapLayer(EVENTS_SOURCE), COUNTRY_OUTLINE)
+
+                    // ── Symbol layer (detailed icons at z≥4) ─────────────
                     style.addLayerAbove(SymbolLayer(EVENTS_SYMBOLS, EVENTS_SOURCE).apply {
+                        minZoom = 4f
                         setProperties(
-                            PropertyFactory.iconImage(
-                                Expression.match(
-                                    Expression.get("type"),
-                                    Expression.literal("earthquake"), Expression.literal(ICON_EARTHQUAKE),
-                                    Expression.literal("fire"),       Expression.literal(ICON_FIRE),
-                                    Expression.literal("conflict"),   Expression.literal(ICON_CONFLICT),
-                                    Expression.literal(ICON_DEFAULT),
+                            PropertyFactory.iconImage(Expression.get("icon_name")),
+                            PropertyFactory.iconSize(
+                                Expression.interpolate(
+                                    Expression.linear(),
+                                    Expression.get("severity_score"),
+                                    Expression.literal(0.0), Expression.literal(0.38),
+                                    Expression.literal(1.0), Expression.literal(1.05),
                                 )
                             ),
-                            PropertyFactory.iconSize(
-                                Expression.match(
-                                    Expression.get("severity"),
-                                    Expression.literal("low"),      Expression.literal(0.45f),
-                                    Expression.literal("medium"),   Expression.literal(0.65f),
-                                    Expression.literal("high"),     Expression.literal(0.85f),
-                                    Expression.literal("critical"), Expression.literal(1.1f),
-                                    Expression.literal(0.5f),
+                            PropertyFactory.iconOpacity(
+                                Expression.interpolate(
+                                    Expression.linear(),
+                                    Expression.get("hours_ago"),
+                                    Expression.literal(0.0),   Expression.literal(1.0),
+                                    Expression.literal(168.0), Expression.literal(0.35),
                                 )
                             ),
                             PropertyFactory.iconAllowOverlap(true),
                             PropertyFactory.iconIgnorePlacement(true),
                             PropertyFactory.iconAnchor("center"),
                         )
-                    }, COUNTRY_OUTLINE)
+                    }, HEATMAP_LAYER)
+
+                    // ── Suppress noisy label layers ───────────────────────
+                    applyIntelligenceStyle(style)
 
                     vm.mapStyleReady.value = true
 
-                    // ── Initial camera: India, zoomed out ─────────────────
+                    // ── Initial camera: India, wide view ──────────────────
                     if (!vm.hasSetInitialCamera) {
                         vm.hasSetInitialCamera = true
                         map.animateCamera(
                             CameraUpdateFactory.newCameraPosition(
                                 CameraPosition.Builder()
                                     .target(LatLng(20.59, 78.96))
-                                    .zoom(2.2).build()
+                                    .zoom(2.0).build()
                             ), 1800
                         )
                     }
@@ -390,77 +400,75 @@ fun MapScreen(
             }
         }
 
-        // ── Stats bar ─────────────────────────────────────────────────────
-        state.stats?.let {
-            StatsBar(
-                articlesCount = it.totalArticles24h, sourcesCount = it.sourcesActive,
-                lastUpdated = state.lastUpdated,
-                modifier = Modifier.align(Alignment.TopCenter).padding(top = 12.dp),
+        // ── Unified intel top bar ──────────────────────────────────────────
+        Column(
+            modifier = Modifier.align(Alignment.TopCenter).fillMaxWidth(),
+        ) {
+            IntelTopBar(
+                isConnected    = state.isConnected,
+                totalArticles  = state.stats?.totalArticles24h,
+                sourcesActive  = state.stats?.sourcesActive,
+                countdown      = countdown,
+                showTimeSlider = state.showTimeSlider,
+                onTimeFilterToggle = { vm.toggleTimeSlider() },
             )
+            AnimatedVisibility(
+                visible = state.showTimeSlider,
+                enter   = slideInVertically { -it } + fadeIn(),
+                exit    = slideOutVertically { -it } + fadeOut(),
+            ) {
+                TimeFilterOverlay(
+                    hours        = state.timeFilterHours,
+                    onHoursChange = { vm.onTimeSliderChange(it) },
+                )
+            }
         }
 
-        // ── Countdown ─────────────────────────────────────────────────────
-        Box(
-            modifier = Modifier.align(Alignment.TopStart).padding(start = 12.dp, top = 12.dp)
-                .clip(RoundedCornerShape(8.dp)).background(BgElevated.copy(alpha = 0.88f))
-                .padding(horizontal = 10.dp, vertical = 5.dp),
-        ) {
-            val m = countdown / 60; val s = countdown % 60
-            Text(if (m > 0) "↻ ${m}m ${s}s" else "↻ ${s}s",
-                style = MaterialTheme.typography.labelSmall, color = TextSecondary, fontSize = 10.sp)
-        }
-
-        // ── Server indicator ──────────────────────────────────────────────
-        Row(
-            modifier = Modifier.align(Alignment.TopEnd).padding(end = 12.dp, top = 12.dp)
-                .clip(RoundedCornerShape(8.dp)).background(BgElevated.copy(alpha = 0.88f))
-                .padding(horizontal = 10.dp, vertical = 5.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(5.dp),
-        ) {
-            Box(Modifier.size(7.dp).clip(CircleShape).background(if (state.isConnected) GreenOk else RedCritical))
-            Text(if (state.isConnected) "Live" else "Offline",
-                style = MaterialTheme.typography.labelSmall,
-                color = if (state.isConnected) GreenOk else RedCritical,
-                fontWeight = FontWeight.SemiBold, fontSize = 10.sp)
-        }
-
+        // ── Loading ────────────────────────────────────────────────────────
         if (state.isLoading && state.scores.isEmpty()) {
             Box(Modifier.fillMaxSize().background(BgDeep.copy(alpha = 0.65f)), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator(color = CyanPrimary, strokeWidth = 3.dp)
             }
         }
 
+        // ── Error banner ───────────────────────────────────────────────────
         state.error?.let { err ->
             Box(
                 modifier = Modifier.align(Alignment.BottomCenter)
                     .padding(bottom = 84.dp, start = 16.dp, end = 16.dp)
-                    .clip(RoundedCornerShape(8.dp)).background(OrangeAlert.copy(alpha = 0.92f))
+                    .clip(RoundedCornerShape(8.dp)).background(RedCritical.copy(alpha = 0.92f))
                     .padding(horizontal = 16.dp, vertical = 8.dp),
             ) { Text(err, color = TextPrimary, style = MaterialTheme.typography.bodySmall) }
         }
 
+        // ── Event info card ────────────────────────────────────────────────
         AnimatedVisibility(
             visible = state.selectedEvent != null,
-            enter = slideInVertically { it } + fadeIn(),
-            exit  = slideOutVertically { it } + fadeOut(),
+            enter   = slideInVertically { it } + fadeIn(),
+            exit    = slideOutVertically { it } + fadeOut(),
             modifier = Modifier.align(Alignment.BottomCenter).padding(start = 12.dp, end = 12.dp, bottom = 80.dp),
         ) { state.selectedEvent?.let { EventInfoCard(it) { vm.selectEvent(null) } } }
 
+        // ── Country info card ──────────────────────────────────────────────
         AnimatedVisibility(
             visible = state.selectedCountry != null && state.selectedEvent == null,
-            enter = slideInVertically { it } + fadeIn(),
-            exit  = slideOutVertically { it } + fadeOut(),
+            enter   = slideInVertically { it } + fadeIn(),
+            exit    = slideOutVertically { it } + fadeOut(),
             modifier = Modifier.align(Alignment.BottomCenter).padding(start = 12.dp, end = 12.dp, bottom = 80.dp),
         ) {
             state.selectedCountry?.let { iso ->
-                CountryInfoCard(iso, state.selectedCountryScore,
-                    state.selectedCountryArticles, state.selectedCountryEvents,
-                    onViewNews = { vm.selectCountry(null); onCountryClick(iso) },
-                    onDismiss  = { vm.selectCountry(null) })
+                CountryInfoCard(
+                    iso          = iso,
+                    score        = state.selectedCountryScore,
+                    articles24h  = state.selectedCountryArticles,
+                    events7d     = state.selectedCountryEvents,
+                    onViewNews   = { vm.selectCountry(null); onCountryClick(iso) },
+                    onDismiss    = { vm.selectCountry(null) },
+                )
             }
         }
 
+        // ── Refresh FAB ────────────────────────────────────────────────────
         FloatingActionButton(
             onClick = { vm.refresh() },
             modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp),
@@ -469,83 +477,97 @@ fun MapScreen(
     }
 }
 
-// ── 3D orb icon factory ───────────────────────────────────────────────────────
+// ── Pulse event type ──────────────────────────────────────────────────────────
 
-private enum class OrbType { EARTHQUAKE, FIRE, CONFLICT, DEFAULT }
+private enum class PulseEventType(
+    val highlight: Int,
+    val core: Int,
+    val mid: Int,
+    val glow: Int,
+) {
+    EARTHQUAKE(
+        highlight = AndroidColor.argb(255, 180, 230, 255),  // icy cyan highlight
+        core      = AndroidColor.argb(255,   0, 180, 255),  // cyan core
+        mid       = AndroidColor.argb(255,   0,  90, 150),  // deep cyan shadow
+        glow      = AndroidColor.argb(90,    0, 200, 255),  // cyan glow
+    ),
+    FIRE(
+        highlight = AndroidColor.argb(255, 255, 220, 160),  // warm highlight
+        core      = AndroidColor.argb(255, 255,  90,  20),  // orange-red core
+        mid       = AndroidColor.argb(255, 140,  30,   0),  // deep red shadow
+        glow      = AndroidColor.argb(90,  255,  80,  20),  // orange glow
+    ),
+    CONFLICT(
+        highlight = AndroidColor.argb(255, 255, 160, 160),  // pink highlight
+        core      = AndroidColor.argb(255, 220,  20,  50),  // deep red core
+        mid       = AndroidColor.argb(255, 100,   5,  15),  // very dark red shadow
+        glow      = AndroidColor.argb(90,  200,  20,  50),  // red glow
+    ),
+    DEFAULT(
+        highlight = AndroidColor.argb(255, 140, 175, 220),  // muted highlight
+        core      = AndroidColor.argb(255,  26,  70, 140),  // dim navy core
+        mid       = AndroidColor.argb(255,  10,  30,  75),  // very deep shadow
+        glow      = AndroidColor.argb(60,   26,  70, 140),  // navy glow
+    );
+
+    val typeKey: String get() = name.lowercase()
+}
 
 /**
- * Draws a 3D-looking glowing orb at 96×96 px with type-specific colours and
- * surface markings — seismic rings for earthquakes, a flame tip for fires,
- * an × for conflicts.  Radial gradient + specular highlight give the 3D illusion.
+ * Renders a single animation frame: a glowing orb with an expanding pulse ring.
+ * Frame 0 = ring tight around orb; frame PULSE_FRAMES-1 = ring fully expanded and faded.
  */
-private fun makeOrbIcon(type: OrbType, sizePx: Int = 96): Bitmap {
+private fun makePulseIcon(type: PulseEventType, frame: Int, sizePx: Int = 96): Bitmap {
     val bmp = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
     val cv  = AndroidCanvas(bmp)
     val cx  = sizePx / 2f
     val cy  = sizePx / 2f
-    val r   = sizePx * 0.27f   // sphere radius
+    val r   = sizePx * 0.22f   // orb radius
 
-    // Type palette: highlight / core / mid / glow
-    val (hi, core, mid, glowArgb) = when (type) {
-        OrbType.EARTHQUAKE -> Quad(
-            AndroidColor.argb(255, 175, 210, 255),  // icy highlight
-            AndroidColor.argb(255,  41, 104, 208),  // core — medium navy
-            AndroidColor.argb(255,  13,  45, 100),  // deep shadow
-            AndroidColor.argb(80,   41, 104, 208),  // glow
-        )
-        OrbType.FIRE -> Quad(
-            AndroidColor.argb(255, 195, 220, 255),  // highlight
-            AndroidColor.argb(255,  58, 130, 228),  // core — brighter navy
-            AndroidColor.argb(255,  26,  82, 180),  // deep shadow
-            AndroidColor.argb(80,   58, 130, 228),  // glow
-        )
-        OrbType.CONFLICT -> Quad(
-            AndroidColor.argb(255, 210, 230, 255),  // bright highlight
-            AndroidColor.argb(255,  95, 156, 244),  // core — electric navy
-            AndroidColor.argb(255,  42, 100, 200),  // deep shadow
-            AndroidColor.argb(80,   95, 156, 244),  // glow
-        )
-        OrbType.DEFAULT -> Quad(
-            AndroidColor.argb(255, 140, 175, 220),  // muted highlight
-            AndroidColor.argb(255,  26,  70, 140),  // core — dim navy
-            AndroidColor.argb(255,  10,  30,  75),  // deep shadow
-            AndroidColor.argb(60,   26,  70, 140),  // glow
-        )
+    val frac = if (PULSE_FRAMES > 1) frame.toFloat() / (PULSE_FRAMES - 1) else 0f
+
+    // ── Expanding pulse rings ──────────────────────────────────────────────
+    val ringPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style       = Paint.Style.STROKE
+        strokeWidth = sizePx * 0.038f
     }
+    // Inner ring
+    val innerRadius = sizePx * (0.30f + frac * 0.14f)
+    ringPaint.color = type.glow
+    ringPaint.alpha = ((1f - frac) * 160).toInt().coerceIn(0, 255)
+    cv.drawCircle(cx, cy, innerRadius, ringPaint)
 
-    // Outer glow rings
-    val glowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = sizePx * 0.035f }
-    listOf(0.47f to 45, 0.37f to 80).forEach { (scale, alpha) ->
-        glowPaint.color = glowArgb; glowPaint.alpha = alpha
-        cv.drawCircle(cx, cy, sizePx * scale, glowPaint)
-    }
+    // Outer ring (slightly behind the inner)
+    val outerRadius = sizePx * (0.38f + frac * 0.10f)
+    ringPaint.strokeWidth = sizePx * 0.022f
+    ringPaint.alpha = ((1f - frac) * 80).toInt().coerceIn(0, 255)
+    cv.drawCircle(cx, cy, outerRadius, ringPaint)
 
-    // 3D sphere — radial gradient with top-left specular highlight
-    val hlX = cx - r * 0.38f; val hlY = cy - r * 0.38f
+    // ── Core orb — radial gradient with top-left specular highlight ────────
+    val hlX = cx - r * 0.38f
+    val hlY = cy - r * 0.38f
     val sphereGrad = RadialGradient(
         hlX, hlY, r * 1.15f,
         intArrayOf(
             AndroidColor.argb(255, 255, 255, 230),  // specular highlight
-            hi, core, mid,
-            AndroidColor.argb(220,   0,   0,   0),  // deep shadow rim
+            type.highlight, type.core, type.mid,
+            AndroidColor.argb(220, 0, 0, 0),        // shadow rim
         ),
         floatArrayOf(0f, 0.15f, 0.45f, 0.78f, 1f),
         Shader.TileMode.CLAMP,
     )
     cv.drawCircle(cx, cy, r, Paint(Paint.ANTI_ALIAS_FLAG).apply { shader = sphereGrad })
 
-    // Surface markings
+    // ── Surface markings ───────────────────────────────────────────────────
     val markPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = AndroidColor.argb(180, 255, 255, 255) }
     when (type) {
-        OrbType.EARTHQUAKE -> {
-            // Seismic concentric rings
+        PulseEventType.EARTHQUAKE -> {
             markPaint.style = Paint.Style.STROKE; markPaint.strokeWidth = sizePx * 0.022f
             listOf(0.52f to 160, 0.70f to 100, 0.88f to 60).forEach { (s, a) ->
                 markPaint.alpha = a; cv.drawCircle(cx, cy, r * s, markPaint)
             }
         }
-        OrbType.FIRE -> {
-            // Flame teardrop
+        PulseEventType.FIRE -> {
             markPaint.style = Paint.Style.FILL; markPaint.alpha = 200
             val path = Path()
             val fy = cy - r * 0.15f
@@ -554,8 +576,7 @@ private fun makeOrbIcon(type: OrbType, sizePx: Int = 96): Bitmap {
             path.quadTo(cx - r * 0.32f, fy - r * 0.05f, cx, fy - r * 0.58f)
             cv.drawPath(path, markPaint)
         }
-        OrbType.CONFLICT -> {
-            // Bold × cross
+        PulseEventType.CONFLICT -> {
             markPaint.style = Paint.Style.STROKE
             markPaint.strokeWidth = sizePx * 0.07f
             markPaint.strokeCap = Paint.Cap.ROUND; markPaint.alpha = 230
@@ -563,92 +584,305 @@ private fun makeOrbIcon(type: OrbType, sizePx: Int = 96): Bitmap {
             cv.drawLine(cx - m, cy - m, cx + m, cy + m, markPaint)
             cv.drawLine(cx + m, cy - m, cx - m, cy + m, markPaint)
         }
-        OrbType.DEFAULT -> Unit
+        PulseEventType.DEFAULT -> Unit
     }
 
     return bmp
 }
 
-private data class Quad<A, B, C, D>(val first: A, val second: B, val third: C, val fourth: D)
+private fun registerAllPulseIcons(style: Style) {
+    PulseEventType.entries.forEach { type ->
+        for (frame in 0 until PULSE_FRAMES) {
+            style.addImage("pulse_${type.typeKey}_f$frame", makePulseIcon(type, frame))
+        }
+    }
+}
 
-// ── Cards ─────────────────────────────────────────────────────────────────────
+// ── Heatmap layer (event density / severity overview) ────────────────────────
+
+private fun buildHeatmapLayer(sourceId: String): HeatmapLayer =
+    HeatmapLayer(HEATMAP_LAYER, sourceId).apply {
+        maxZoom = 9f
+        setProperties(
+            PropertyFactory.heatmapWeight(
+                Expression.interpolate(
+                    Expression.linear(),
+                    Expression.get("severity_score"),
+                    Expression.literal(0.0), Expression.literal(0.0),
+                    Expression.literal(1.0), Expression.literal(1.0),
+                )
+            ),
+            PropertyFactory.heatmapIntensity(
+                Expression.interpolate(
+                    Expression.linear(),
+                    Expression.zoom(),
+                    Expression.literal(0.0), Expression.literal(1.0),
+                    Expression.literal(9.0), Expression.literal(3.0),
+                )
+            ),
+            PropertyFactory.heatmapColor(
+                Expression.interpolate(
+                    Expression.linear(),
+                    Expression.heatmapDensity(),
+                    Expression.literal(0.0), Expression.rgba(0.0,   0.0,   0.0,   0.0),
+                    Expression.literal(0.2), Expression.rgba(0.0,   180.0, 255.0, 0.6),
+                    Expression.literal(0.4), Expression.rgba(30.0,  80.0,  220.0, 0.75),
+                    Expression.literal(0.6), Expression.rgba(100.0, 0.0,   200.0, 0.85),
+                    Expression.literal(0.8), Expression.rgba(200.0, 0.0,   80.0,  0.9),
+                    Expression.literal(1.0), Expression.rgba(255.0, 30.0,  30.0,  1.0),
+                )
+            ),
+            PropertyFactory.heatmapRadius(
+                Expression.interpolate(
+                    Expression.linear(),
+                    Expression.zoom(),
+                    Expression.literal(0.0), Expression.literal(15.0),
+                    Expression.literal(9.0), Expression.literal(35.0),
+                )
+            ),
+            PropertyFactory.heatmapOpacity(
+                Expression.interpolate(
+                    Expression.linear(),
+                    Expression.zoom(),
+                    Expression.literal(7.0), Expression.literal(0.85),
+                    Expression.literal(9.0), Expression.literal(0.0),
+                )
+            ),
+        )
+    }
+
+// ── Intelligence style: suppress noisy labels ─────────────────────────────────
+
+private fun applyIntelligenceStyle(style: Style) {
+    listOf(
+        "poi_label", "poi-label", "transit-label", "transit_label",
+        "road_label", "road-label", "road-shields",
+        "waterway_label", "waterway-label",
+        "airport-label", "airport_label",
+        "ferry-aerialway-label",
+    ).forEach { id ->
+        style.getLayer(id)?.setProperties(PropertyFactory.visibility("none"))
+    }
+}
+
+// ── Composables ───────────────────────────────────────────────────────────────
 
 @Composable
-private fun EventInfoCard(event: MapEventInfo, onDismiss: () -> Unit) {
-    val (label, tint) = when (event.type) {
-        "earthquake" -> "Earthquake" to OrangeAlert
-        "fire"       -> "Wildfire"   to Color(0xFFFFD700)
-        "conflict"   -> "Conflict"   to RedCritical
-        else         -> event.type.replaceFirstChar { it.uppercase() } to TextSecondary
+private fun PulsingDot(isConnected: Boolean) {
+    val transition = rememberInfiniteTransition(label = "dot")
+    val alpha by transition.animateFloat(
+        initialValue = 0.4f, targetValue = 1.0f,
+        animationSpec = infiniteRepeatable(tween(900), RepeatMode.Reverse),
+        label = "dotAlpha",
+    )
+    Box(
+        Modifier.size(8.dp).clip(CircleShape)
+            .background(
+                if (isConnected) GreenOk.copy(alpha = alpha) else RedCritical
+            )
+    )
+}
+
+@Composable
+private fun IntelStat(value: String, label: String) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(value, style = MaterialTheme.typography.labelMedium, color = CyanPrimary,
+            fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+        Text(label, style = MaterialTheme.typography.labelSmall, color = TextSecondary, fontSize = 9.sp)
     }
-    val severityColor = when (event.severity) {
-        "low" -> GreenOk; "medium" -> OrangeAlert; "high" -> Color(0xFF3A7AE4); else -> Color(0xFF5F9CF5)
-    }
-    Card(shape = RoundedCornerShape(16.dp), colors = CardDefaults.cardColors(BgElevated), elevation = CardDefaults.cardElevation(12.dp)) {
-        Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
-            Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
-                Column {
-                    Text(label, style = MaterialTheme.typography.titleLarge, color = tint, fontWeight = FontWeight.Bold)
-                    Text(event.severity.replaceFirstChar { it.uppercase() }, style = MaterialTheme.typography.bodySmall, color = severityColor, fontWeight = FontWeight.SemiBold)
-                }
-                IconButton(onClick = onDismiss) { Icon(Icons.Default.Close, null, tint = TextSecondary) }
-            }
-            if (event.title.isNotBlank()) {
-                Spacer(Modifier.height(8.dp))
-                Text(event.title, style = MaterialTheme.typography.bodyMedium, color = TextPrimary, maxLines = 3)
-            }
-            if (event.type == "earthquake" && event.magnitude > 0.0) {
-                Spacer(Modifier.height(8.dp))
-                StatChip("M%.1f".format(event.magnitude), "magnitude", OrangeAlert)
-            }
+}
+
+@Composable
+private fun IntelTopBar(
+    isConnected: Boolean,
+    totalArticles: Int?,
+    sourcesActive: Int?,
+    countdown: Int,
+    showTimeSlider: Boolean,
+    onTimeFilterToggle: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 8.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(BgElevated.copy(alpha = 0.92f))
+            .padding(horizontal = 14.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        PulsingDot(isConnected)
+        Text(
+            if (isConnected) "LIVE" else "OFFLINE",
+            style = MaterialTheme.typography.labelSmall,
+            color = if (isConnected) GreenOk else RedCritical,
+            fontWeight = FontWeight.Bold, fontSize = 9.sp,
+        )
+        if (totalArticles != null) IntelStat(totalArticles.toString(), "art")
+        if (sourcesActive != null) IntelStat(sourcesActive.toString(), "src")
+        Spacer(Modifier.weight(1f))
+        val m = countdown / 60; val s = countdown % 60
+        Text(
+            if (m > 0) "${m}m ${s}s" else "${s}s",
+            style = MaterialTheme.typography.labelSmall,
+            color = TextSecondary, fontSize = 10.sp,
+            fontFamily = FontFamily.Monospace,
+        )
+        IconButton(onClick = onTimeFilterToggle, modifier = Modifier.size(28.dp)) {
+            Icon(
+                Icons.Default.Schedule, null,
+                tint = if (showTimeSlider) CyanPrimary else TextSecondary,
+                modifier = Modifier.size(16.dp),
+            )
         }
     }
 }
 
 @Composable
-private fun CountryInfoCard(iso: String, score: Float, articles24h: Int?, events7d: Int?, onViewNews: () -> Unit, onDismiss: () -> Unit) {
-    val (label, tint) = when {
-        score <= 0f   -> "No Activity" to TextSecondary
-        score < 0.15f -> "Minimal"     to GreenOk
-        score < 0.40f -> "Moderate"    to GreenOk
-        score < 0.65f -> "Elevated"    to OrangeAlert
-        score < 0.85f -> "High"        to OrangeAlert
-        else           -> "Critical"  to RedCritical
-    }
-    Card(shape = RoundedCornerShape(16.dp), colors = CardDefaults.cardColors(BgElevated), elevation = CardDefaults.cardElevation(12.dp)) {
-        Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
-            Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
-                Column {
-                    Text(iso.uppercase(), style = MaterialTheme.typography.titleLarge, color = TextPrimary, fontWeight = FontWeight.Bold)
-                    Text(label, style = MaterialTheme.typography.bodySmall, color = tint, fontWeight = FontWeight.SemiBold)
-                }
-                IconButton(onClick = onDismiss) { Icon(Icons.Default.Close, null, tint = TextSecondary) }
-            }
-            Spacer(Modifier.height(8.dp))
-            LinearProgressIndicator(
-                progress = { score.coerceIn(0f, 1f) },
-                modifier = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(3.dp)),
-                color = tint, trackColor = BgCard,
+private fun TimeFilterOverlay(hours: Int, onHoursChange: (Int) -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(BgElevated.copy(alpha = 0.92f))
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+    ) {
+        Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
+            Text("Time window", style = MaterialTheme.typography.labelMedium, color = TextSecondary)
+            Text(
+                when {
+                    hours >= 168 -> "7 days"
+                    hours >= 48  -> "${hours / 24}d"
+                    else         -> "${hours}h"
+                },
+                style = MaterialTheme.typography.labelMedium,
+                color = CyanPrimary, fontWeight = FontWeight.Bold,
+                fontFamily = FontFamily.Monospace,
             )
-            if (articles24h != null || events7d != null) {
-                Spacer(Modifier.height(10.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(20.dp)) {
-                    articles24h?.let { StatChip("$it", "articles 24h", CyanPrimary) }
-                    events7d?.let    { StatChip("$it", "events 7d",    OrangeAlert) }
+        }
+        Slider(
+            value        = hours.toFloat(),
+            onValueChange = { onHoursChange(it.toInt()) },
+            valueRange   = 6f..168f,
+            modifier     = Modifier.fillMaxWidth(),
+            colors       = SliderDefaults.colors(
+                thumbColor         = CyanPrimary,
+                activeTrackColor   = CyanPrimary,
+                inactiveTrackColor = BgCard,
+            ),
+        )
+    }
+}
+
+// ── Info cards ────────────────────────────────────────────────────────────────
+
+@Composable
+private fun EventInfoCard(event: MapEventInfo, onDismiss: () -> Unit) {
+    val (typeLabel, typeTint) = when (event.type) {
+        "earthquake" -> "Earthquake" to CyanPrimary
+        "fire"       -> "Wildfire"   to Color(0xFFFF5722)
+        "conflict"   -> "Conflict"   to RedCritical
+        else         -> event.type.replaceFirstChar { it.uppercase() } to TextSecondary
+    }
+    val severityColor = when (event.severity) {
+        "low"      -> Color(0xFF2A4A6E)
+        "medium"   -> Color(0xFF1E52A0)
+        "high"     -> Color(0xFF3A7AE4)
+        "critical" -> Color(0xFF5F9CF5)
+        else       -> TextSecondary
+    }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(BgElevated.copy(alpha = 0.96f))
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+    ) {
+        Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
+            Column {
+                Text(typeLabel, style = MaterialTheme.typography.titleLarge, color = typeTint, fontWeight = FontWeight.Bold)
+                Row(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(severityColor.copy(alpha = 0.25f))
+                        .padding(horizontal = 8.dp, vertical = 2.dp),
+                ) {
+                    Text(
+                        event.severity.uppercase(),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = severityColor, fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace,
+                    )
                 }
-            } else {
-                Spacer(Modifier.height(10.dp))
-                Text("Loading details…", style = MaterialTheme.typography.bodySmall, color = TextSecondary)
             }
-            Spacer(Modifier.height(14.dp))
-            Button(
-                onClick = onViewNews, modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.buttonColors(CyanPrimary), shape = RoundedCornerShape(10.dp),
-            ) {
-                Icon(Icons.Default.Article, null, tint = BgDeep, modifier = Modifier.size(16.dp))
-                Spacer(Modifier.width(6.dp))
-                Text("News from $iso", color = BgDeep, fontWeight = FontWeight.Bold)
+            IconButton(onClick = onDismiss) { Icon(Icons.Default.Close, null, tint = TextSecondary) }
+        }
+        if (event.title.isNotBlank()) {
+            Spacer(Modifier.height(8.dp))
+            Text(event.title, style = MaterialTheme.typography.bodyMedium, color = TextPrimary, maxLines = 3)
+        }
+        if (event.type == "earthquake" && event.magnitude > 0.0) {
+            Spacer(Modifier.height(10.dp))
+            StatChip("M%.1f".format(event.magnitude), "magnitude", CyanPrimary)
+        }
+    }
+}
+
+@Composable
+private fun CountryInfoCard(
+    iso: String, score: Float, articles24h: Int?, events7d: Int?,
+    onViewNews: () -> Unit, onDismiss: () -> Unit,
+) {
+    val (statusLabel, statusTint) = when {
+        score <= 0f    -> "No Activity" to TextSecondary
+        score < 0.15f  -> "Minimal"     to GreenOk
+        score < 0.40f  -> "Moderate"    to GreenOk
+        score < 0.65f  -> "Elevated"    to CyanPrimary
+        score < 0.85f  -> "High"        to Color(0xFF3A7AE4)
+        else            -> "Critical"   to RedCritical
+    }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(BgElevated.copy(alpha = 0.96f))
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+    ) {
+        Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
+            Column {
+                Text(iso.uppercase(), style = MaterialTheme.typography.titleLarge,
+                    color = TextPrimary, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                Text(statusLabel, style = MaterialTheme.typography.bodySmall,
+                    color = statusTint, fontWeight = FontWeight.SemiBold)
             }
+            IconButton(onClick = onDismiss) { Icon(Icons.Default.Close, null, tint = TextSecondary) }
+        }
+        Spacer(Modifier.height(8.dp))
+        LinearProgressIndicator(
+            progress     = { score.coerceIn(0f, 1f) },
+            modifier     = Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(2.dp)),
+            color        = statusTint,
+            trackColor   = BgCard,
+        )
+        if (articles24h != null || events7d != null) {
+            Spacer(Modifier.height(12.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(20.dp)) {
+                articles24h?.let { StatChip("$it", "articles 24h", CyanPrimary) }
+                events7d?.let    { StatChip("$it", "events 7d",    Color(0xFF3A7AE4)) }
+            }
+        } else {
+            Spacer(Modifier.height(10.dp))
+            Text("Loading details…", style = MaterialTheme.typography.bodySmall, color = TextSecondary)
+        }
+        Spacer(Modifier.height(14.dp))
+        Button(
+            onClick = onViewNews, modifier = Modifier.fillMaxWidth(),
+            colors = ButtonDefaults.buttonColors(CyanPrimary), shape = RoundedCornerShape(10.dp),
+        ) {
+            Icon(Icons.Default.Article, null, tint = BgDeep, modifier = Modifier.size(16.dp))
+            Spacer(Modifier.width(6.dp))
+            Text("News from $iso", color = BgDeep, fontWeight = FontWeight.Bold)
         }
     }
 }
@@ -656,12 +890,13 @@ private fun CountryInfoCard(iso: String, score: Float, articles24h: Int?, events
 @Composable
 private fun StatChip(value: String, label: String, color: Color) {
     Column {
-        Text(value, style = MaterialTheme.typography.titleSmall, color = color, fontWeight = FontWeight.Bold)
+        Text(value, style = MaterialTheme.typography.titleSmall, color = color,
+            fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
         Text(label, style = MaterialTheme.typography.labelSmall, color = TextSecondary)
     }
 }
 
-// ── Heatmap ───────────────────────────────────────────────────────────────────
+// ── Heatmap color helpers ─────────────────────────────────────────────────────
 
 private fun buildHeatmapColorExpression(scores: Map<String, Float>): Expression {
     if (scores.isEmpty()) return Expression.rgba(0.0, 0.0, 0.0, 0.0)
@@ -673,11 +908,11 @@ private fun buildHeatmapColorExpression(scores: Map<String, Float>): Expression 
 
 private fun scoreToRgba(score: Float): Expression = when {
     score <= 0f   -> Expression.rgba(0.0,   0.0,   0.0,   0.0)
-    score < 0.10f -> Expression.rgba(13.0,  38.0,  85.0,  0.55)   // dark navy
-    score < 0.25f -> Expression.rgba(20.0,  62.0,  142.0, 0.68)   // navy
-    score < 0.40f -> Expression.rgba(26.0,  82.0,  180.0, 0.75)   // medium navy
-    score < 0.55f -> Expression.rgba(35.0,  100.0, 210.0, 0.82)   // brighter navy
-    score < 0.70f -> Expression.rgba(55.0,  120.0, 228.0, 0.88)   // bright navy
-    score < 0.85f -> Expression.rgba(75.0,  140.0, 244.0, 0.92)   // very bright navy
-    else          -> Expression.rgba(95.0,  160.0, 255.0, 0.97)   // electric blue
+    score < 0.10f -> Expression.rgba(13.0,  38.0,  85.0,  0.55)
+    score < 0.25f -> Expression.rgba(20.0,  62.0,  142.0, 0.68)
+    score < 0.40f -> Expression.rgba(26.0,  82.0,  180.0, 0.75)
+    score < 0.55f -> Expression.rgba(35.0,  100.0, 210.0, 0.82)
+    score < 0.70f -> Expression.rgba(55.0,  120.0, 228.0, 0.88)
+    score < 0.85f -> Expression.rgba(75.0,  140.0, 244.0, 0.92)
+    else          -> Expression.rgba(95.0,  160.0, 255.0, 0.97)
 }
