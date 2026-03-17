@@ -11,7 +11,7 @@ val BgCard = Color(0xFF162138)
 // Accents
 val CyanPrimary = Color(0xFF00E5FF)
 val CyanDim = Color(0xFF0094B3)
-val OrangeAlert = Color(0xFFFF6D00)
+val OrangeAlert = Color(0xFF2968D0)      // navy accent (medium-bright)
 val RedCritical = Color(0xFFFF1744)
 val GreenOk = Color(0xFF00E676)
 
@@ -20,15 +20,15 @@ val TextPrimary = Color(0xFFECF0F8)
 val TextSecondary = Color(0xFF7A8FA8)
 val TextMuted = Color(0xFF3D5068)
 
-// Heatmap color scale
-val HeatmapNone = Color(0xFF0A0E1A)      // 0.0 — no data
-val HeatmapLow = Color(0xFF143250)       // 0.15
-val HeatmapMedium = Color(0xFF64320A)    // 0.4
-val HeatmapHigh = Color(0xFFDC5014)      // 0.7
-val HeatmapCritical = Color(0xFFFF1414)  // 1.0
+// Heatmap color scale — navy severity gradient
+val HeatmapNone = Color(0xFF070C18)      // 0.0 — no data
+val HeatmapLow = Color(0xFF0D2655)       // 0.15 — dark navy
+val HeatmapMedium = Color(0xFF1A4490)    // 0.4  — medium navy
+val HeatmapHigh = Color(0xFF2B6BD4)      // 0.7  — bright navy
+val HeatmapCritical = Color(0xFF5090F0)  // 1.0  — electric navy
 
-// Severity badge colors
-val SeverityLow = Color(0xFF3D5068)
-val SeverityMedium = Color(0xFFD4AC0D)
-val SeverityHigh = Color(0xFFE8590C)
-val SeverityCritical = Color(0xFFFF1744)
+// Severity badge colors — navy scale
+val SeverityLow = Color(0xFF2A4A6E)      // dim navy
+val SeverityMedium = Color(0xFF1E52A0)   // medium navy
+val SeverityHigh = Color(0xFF3A7AE4)     // bright navy
+val SeverityCritical = Color(0xFF5F9CF5) // brightest quiet navy

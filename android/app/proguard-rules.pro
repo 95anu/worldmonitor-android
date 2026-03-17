@@ -29,9 +29,10 @@
     kotlinx.serialization.KSerializer serializer(...);
 }
 
-# MapLibre
--keep class org.maplibre.** { *; }
--dontwarn org.maplibre.**
+# WebView JS interface — keep @JavascriptInterface methods from being renamed
+-keepclassmembers class * {
+    @android.webkit.JavascriptInterface <methods>;
+}
 
 # Coil
 -dontwarn coil.**

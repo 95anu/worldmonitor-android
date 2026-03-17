@@ -72,12 +72,8 @@ fun AppNavigation() {
                         selected = selected,
                         onClick = {
                             navController.navigate(item.route) {
-                                // Use explicit route string for reliability
-                                popUpTo(Routes.MAP) {
-                                    saveState = true
-                                }
+                                popUpTo(Routes.MAP) { inclusive = false }
                                 launchSingleTop = true
-                                restoreState = true
                             }
                         },
                         colors = NavigationBarItemDefaults.colors(

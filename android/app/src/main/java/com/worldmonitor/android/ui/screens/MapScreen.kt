@@ -83,12 +83,17 @@ import org.maplibre.android.geometry.LatLng
 import org.maplibre.android.maps.Style
 import org.maplibre.android.style.expressions.Expression
 import org.maplibre.android.style.layers.FillLayer
+import org.maplibre.android.style.layers.HillshadeLayer
 import org.maplibre.android.style.layers.PropertyFactory
 import org.maplibre.android.style.layers.SymbolLayer
 import org.maplibre.android.style.sources.GeoJsonSource
+import org.maplibre.android.style.sources.RasterDemSource
+import org.maplibre.android.style.sources.TileSet
 import kotlin.math.sin
 
 private const val DARK_MAP_STYLE   = "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json"
+private const val TERRAIN_SOURCE   = "terrain-dem"
+private const val HILLSHADE_LAYER  = "hillshade-layer"
 private const val COUNTRIES_SOURCE = "countries-source"
 private const val EVENTS_SOURCE    = "events-source"
 private const val COUNTRY_FILL     = "country-fill"
@@ -224,13 +229,13 @@ fun MapScreen(
         if (!styleReady) return@LaunchedEffect
         var t = 0.0
         while (true) {
-            val alpha = (0.72f + 0.28f * sin(t).toFloat()).coerceIn(0f, 1f)
+            val alpha = (0.80f + 0.18f * sin(t).toFloat()).coerceIn(0f, 1f)
             mapRef?.getStyle { style ->
                 (style.getLayer(COUNTRY_FILL) as? FillLayer)?.setProperties(
                     PropertyFactory.fillOpacity(alpha)
                 )
             }
-            t += 0.08; delay(100L)
+            t += 0.018; delay(100L)
         }
     }
 
@@ -257,6 +262,32 @@ fun MapScreen(
                     .target(LatLng(20.0, 0.0)).zoom(1.5).build()
 
                 map.setStyle(Style.Builder().fromUri(DARK_MAP_STYLE)) { style ->
+
+                    // ── Terrain hillshade (beneath all data layers) ────────
+                    val terrainTiles = TileSet("2.2.0",
+                        "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"
+                    ).apply {
+                        encoding = "terrarium"
+                        minZoom  = 0f
+                        maxZoom  = 15f
+                    }
+                    style.addSource(RasterDemSource(TERRAIN_SOURCE, terrainTiles, 256))
+                    style.addLayer(HillshadeLayer(HILLSHADE_LAYER, TERRAIN_SOURCE).apply {
+                        setProperties(
+                            PropertyFactory.hillshadeIlluminationDirection(335f),
+                            PropertyFactory.hillshadeIlluminationAnchor("map"),
+                            PropertyFactory.hillshadeExaggeration(0.28f),
+                            PropertyFactory.hillshadeHighlightColor(
+                                android.graphics.Color.argb(90, 95, 156, 244)   // bright navy — lit slopes
+                            ),
+                            PropertyFactory.hillshadeShadowColor(
+                                android.graphics.Color.argb(140, 4, 12, 38)     // near-black navy — shadow
+                            ),
+                            PropertyFactory.hillshadeAccentColor(
+                                android.graphics.Color.argb(55, 26, 70, 160)    // medium navy — mid-tones
+                            ),
+                        )
+                    })
 
                     // ── Country fill ──────────────────────────────────────
                     val rawGeoJson = sCachedGeoJson ?: run {
@@ -457,28 +488,28 @@ private fun makeOrbIcon(type: OrbType, sizePx: Int = 96): Bitmap {
     // Type palette: highlight / core / mid / glow
     val (hi, core, mid, glowArgb) = when (type) {
         OrbType.EARTHQUAKE -> Quad(
-            AndroidColor.argb(255, 255, 245, 180),
-            AndroidColor.argb(255, 255, 175, 30),
-            AndroidColor.argb(255, 200,  90,  5),
-            AndroidColor.argb(90,  255, 165, 30),
+            AndroidColor.argb(255, 175, 210, 255),  // icy highlight
+            AndroidColor.argb(255,  41, 104, 208),  // core — medium navy
+            AndroidColor.argb(255,  13,  45, 100),  // deep shadow
+            AndroidColor.argb(80,   41, 104, 208),  // glow
         )
         OrbType.FIRE -> Quad(
-            AndroidColor.argb(255, 255, 255, 180),
-            AndroidColor.argb(255, 255, 215,  0),
-            AndroidColor.argb(255, 255, 140,  0),
-            AndroidColor.argb(90,  255, 200,  0),
+            AndroidColor.argb(255, 195, 220, 255),  // highlight
+            AndroidColor.argb(255,  58, 130, 228),  // core — brighter navy
+            AndroidColor.argb(255,  26,  82, 180),  // deep shadow
+            AndroidColor.argb(80,   58, 130, 228),  // glow
         )
         OrbType.CONFLICT -> Quad(
-            AndroidColor.argb(255, 255, 190, 190),
-            AndroidColor.argb(255, 230,  50,  50),
-            AndroidColor.argb(255, 170,  15,  15),
-            AndroidColor.argb(90,  255,  60,  60),
+            AndroidColor.argb(255, 210, 230, 255),  // bright highlight
+            AndroidColor.argb(255,  95, 156, 244),  // core — electric navy
+            AndroidColor.argb(255,  42, 100, 200),  // deep shadow
+            AndroidColor.argb(80,   95, 156, 244),  // glow
         )
         OrbType.DEFAULT -> Quad(
-            AndroidColor.argb(255, 210, 210, 210),
-            AndroidColor.argb(255, 155, 155, 155),
-            AndroidColor.argb(255,  90,  90,  90),
-            AndroidColor.argb(70,  160, 160, 160),
+            AndroidColor.argb(255, 140, 175, 220),  // muted highlight
+            AndroidColor.argb(255,  26,  70, 140),  // core — dim navy
+            AndroidColor.argb(255,  10,  30,  75),  // deep shadow
+            AndroidColor.argb(60,   26,  70, 140),  // glow
         )
     }
 
@@ -551,7 +582,7 @@ private fun EventInfoCard(event: MapEventInfo, onDismiss: () -> Unit) {
         else         -> event.type.replaceFirstChar { it.uppercase() } to TextSecondary
     }
     val severityColor = when (event.severity) {
-        "low" -> GreenOk; "medium" -> OrangeAlert; "high" -> Color(0xFFFF6B35); else -> RedCritical
+        "low" -> GreenOk; "medium" -> OrangeAlert; "high" -> Color(0xFF3A7AE4); else -> Color(0xFF5F9CF5)
     }
     Card(shape = RoundedCornerShape(16.dp), colors = CardDefaults.cardColors(BgElevated), elevation = CardDefaults.cardElevation(12.dp)) {
         Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
@@ -642,11 +673,11 @@ private fun buildHeatmapColorExpression(scores: Map<String, Float>): Expression 
 
 private fun scoreToRgba(score: Float): Expression = when {
     score <= 0f   -> Expression.rgba(0.0,   0.0,   0.0,   0.0)
-    score < 0.10f -> Expression.rgba(10.0,  40.0,  120.0, 0.55)
-    score < 0.25f -> Expression.rgba(20.0,  60.0,  160.0, 0.68)
-    score < 0.40f -> Expression.rgba(100.0, 50.0,  10.0,  0.75)
-    score < 0.55f -> Expression.rgba(180.0, 70.0,  15.0,  0.82)
-    score < 0.70f -> Expression.rgba(230.0, 90.0,  20.0,  0.88)
-    score < 0.85f -> Expression.rgba(255.0, 45.0,  15.0,  0.92)
-    else          -> Expression.rgba(255.0, 10.0,  10.0,  0.97)
+    score < 0.10f -> Expression.rgba(13.0,  38.0,  85.0,  0.55)   // dark navy
+    score < 0.25f -> Expression.rgba(20.0,  62.0,  142.0, 0.68)   // navy
+    score < 0.40f -> Expression.rgba(26.0,  82.0,  180.0, 0.75)   // medium navy
+    score < 0.55f -> Expression.rgba(35.0,  100.0, 210.0, 0.82)   // brighter navy
+    score < 0.70f -> Expression.rgba(55.0,  120.0, 228.0, 0.88)   // bright navy
+    score < 0.85f -> Expression.rgba(75.0,  140.0, 244.0, 0.92)   // very bright navy
+    else          -> Expression.rgba(95.0,  160.0, 255.0, 0.97)   // electric blue
 }
